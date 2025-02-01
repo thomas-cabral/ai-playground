@@ -18,6 +18,8 @@
     "vite": "^6.0.5"
   },
   "dependencies": {
-    "marked": "^15.0.6"
+    "marked": "^15.0.6",
+    "@types/prismjs": "^1.26.5",
+    "prismjs": "^1.29.0"
   }
 }

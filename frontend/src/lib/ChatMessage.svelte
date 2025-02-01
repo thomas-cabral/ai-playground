@@ -1,21 +1,97 @@
 <script lang="ts">
   import { marked } from 'marked';
-  import { onMount } from 'svelte';
+  import { onMount, afterUpdate } from 'svelte';
+  import 'prismjs';
+  import * as Prism from 'prismjs';
+  
+  // Import Prism theme
+  import 'prismjs/themes/prism-tomorrow.css';
+  
+  // Import languages in dependency order
+  import 'prismjs/components/prism-c';
+  import 'prismjs/components/prism-cpp';
+  import 'prismjs/components/prism-python';
+  import 'prismjs/components/prism-typescript';
+  import 'prismjs/components/prism-jsx';
+  import 'prismjs/components/prism-tsx';
+  import 'prismjs/components/prism-css';
+  import 'prismjs/components/prism-scss';
+  import 'prismjs/components/prism-json';
+  import 'prismjs/components/prism-java';
+  import 'prismjs/components/prism-go';
+  import 'prismjs/components/prism-rust';
+  import 'prismjs/components/prism-bash';
+  import 'prismjs/components/prism-yaml';
+  import 'prismjs/components/prism-sql';
+  import 'prismjs/components/prism-graphql';
+  import 'prismjs/components/prism-csharp';
 
   export let message: {
     Role: string;
     Content: string;
   };
 
-  // Configure marked for safe HTML
+  let contentElement: HTMLElement;
+  let formattedContent: string;
+
+  // Configure marked for safe HTML and syntax highlighting
   marked.setOptions({
-    breaks: true,  // Convert \n to <br>
-    gfm: true,     // GitHub Flavored Markdown
-    headerIds: false,
-    mangle: false
+    breaks: true,
+    gfm: true,
+    mangle: false,
+    highlight: function(code, lang) {
+      if (!lang) return code;
+      
+      lang = lang.toLowerCase();
+      const langMap: { [key: string]: string } = {
+        'js': 'javascript',
+        'ts': 'typescript',
+        'py': 'python',
+        'yml': 'yaml',
+        'shell': 'bash',
+        'sh': 'bash',
+        'jsx': 'jsx',
+        'tsx': 'tsx',
+        'scss': 'scss',
+        'rust': 'rust',
+        'go': 'go',
+        'cs': 'csharp',
+        'rb': 'ruby',
+        'md': 'markdown'
+      };
+      
+      const normalizedLang = langMap[lang] || lang;
+      
+      try {
+        if (Prism.languages[normalizedLang]) {
+          return Prism.highlight(code, Prism.languages[normalizedLang], normalizedLang);
+        }
+      } catch (e) {
+        console.warn(`Failed to highlight ${normalizedLang}:`, e);
+      }
+      return code;
+    }
   });
 
   $: formattedContent = marked(message.Content);
+
+  function highlightCode() {
+    if (contentElement) {
+      requestAnimationFrame(() => {
+        const codeBlocks = contentElement.querySelectorAll('pre code');
+        codeBlocks.forEach((block: Element) => {
+          const className = block.className;
+          const lang = className?.match(/language-(\w+)/)?.[1];
+          if (block.textContent && lang && Prism.languages[lang]) {
+            Prism.highlightElement(block);
+          }
+        });
+      });
+    }
+  }
+
+  afterUpdate(highlightCode);
+  onMount(highlightCode);
 </script>
 
 <div class="message {message.Role.toLowerCase()}">
@@ -23,7 +99,7 @@
     {message.Role === 'user' ? '👤' : '🤖'}
   </div>
   <div class="content-wrapper">
-    <div class="content">
+    <div class="content" bind:this={contentElement}>
       {@html formattedContent}
     </div>
   </div>
@@ -198,5 +274,73 @@
 
   .content::-webkit-scrollbar-track {
     background-color: #2a2a2a;
+  }
+
+  /* Add Prism theme styles */
+  .content :global(pre code.language-javascript),
+  .content :global(pre code.language-typescript),
+  .content :global(pre code.language-css),
+  .content :global(pre code.language-json),
+  .content :global(pre code.language-bash),
+  .content :global(pre code.language-go) {
+    color: #f8f8f2;
+  }
+
+  .content :global(.token.comment),
+  .content :global(.token.prolog),
+  .content :global(.token.doctype),
+  .content :global(.token.cdata) {
+    color: #8292a2;
+  }
+
+  .content :global(.token.punctuation) {
+    color: #f8f8f2;
+  }
+
+  .content :global(.token.property),
+  .content :global(.token.tag),
+  .content :global(.token.constant),
+  .content :global(.token.symbol),
+  .content :global(.token.deleted) {
+    color: #ff79c6;
+  }
+
+  .content :global(.token.boolean),
+  .content :global(.token.number) {
+    color: #bd93f9;
+  }
+
+  .content :global(.token.selector),
+  .content :global(.token.attr-name),
+  .content :global(.token.string),
+  .content :global(.token.char),
+  .content :global(.token.builtin),
+  .content :global(.token.inserted) {
+    color: #50fa7b;
+  }
+
+  .content :global(.token.operator),
+  .content :global(.token.entity),
+  .content :global(.token.url),
+  .content :global(.language-css .token.string),
+  .content :global(.style .token.string),
+  .content :global(.token.variable) {
+    color: #f8f8f2;
+  }
+
+  .content :global(.token.atrule),
+  .content :global(.token.attr-value),
+  .content :global(.token.function),
+  .content :global(.token.class-name) {
+    color: #f1fa8c;
+  }
+
+  .content :global(.token.keyword) {
+    color: #ff79c6;
+  }
+
+  .content :global(.token.regex),
+  .content :global(.token.important) {
+    color: #ffb86c;
   }
 </style> 
