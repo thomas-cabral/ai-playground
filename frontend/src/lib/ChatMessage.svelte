@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { marked } from 'marked';
+  import { marked, type MarkedOptions } from 'marked';
   import { onMount, afterUpdate } from 'svelte';
   import 'prismjs';
   import * as Prism from 'prismjs';
@@ -38,8 +38,7 @@
   marked.setOptions({
     breaks: true,
     gfm: true,
-    mangle: false,
-    highlight: function(code, lang) {
+    highlight: function(code: string, lang: string): string | Promise<string> {
       if (!lang) return code;
       
       lang = lang.toLowerCase();
@@ -71,7 +70,7 @@
       }
       return code;
     }
-  });
+  } as MarkedOptions);
 
   $: formattedContent = marked(message.Content);
 
