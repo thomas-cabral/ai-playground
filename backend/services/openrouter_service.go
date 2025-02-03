@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 
 	"web/ai-playground/models"
 
+	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 )
 
@@ -68,8 +71,13 @@ type StreamResponse struct {
 }
 
 func NewOpenRouterService(db *gorm.DB) *OpenRouterService {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+	openRouterAPIKey := os.Getenv("OPENROUTER_API_KEY")
 	return &OpenRouterService{
-		APIKey:  "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",
+		APIKey:  openRouterAPIKey,
 		BaseURL: "https://openrouter.ai/api/v1",
 		DB:      db,
 	}

@@ -49,7 +49,7 @@ func main() {
 	setupRoutes(router, chatController)
 
 	// Start server
-	if err := router.Run(":8080"); err != nil {
+	if err := router.Run(":8088"); err != nil {
 		log.Fatal("failed to start server:", err)
 	}
 }

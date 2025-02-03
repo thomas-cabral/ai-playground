@@ -84,7 +84,7 @@
 
     // Add this to fetch chat history
     try {
-      const response = await fetch('http://localhost:8080/api/history');
+      const response = await fetch('http://localhost:8088/api/history');
       if (response.ok) {
         previousChats = await response.json();
       }
@@ -129,7 +129,7 @@
     try {
         // First, if this is a new chat, create it
         if (!currentChatId) {
-            const createChatResponse = await fetch('http://localhost:8080/api/chat/new', {
+            const createChatResponse = await fetch('http://localhost:8088/api/chat/new', {
                 method: 'POST',
             });
             
@@ -142,7 +142,7 @@
         }
 
         // Now send the message
-        const response = await fetch('http://localhost:8080/api/chat', {
+        const response = await fetch('http://localhost:8088/api/chat', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
