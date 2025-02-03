@@ -173,6 +173,16 @@
             messages[messages.length - 1].Content += content;
             messages = messages; // Trigger Svelte reactivity
         }
+        
+        // Fetch updated chat history after new chat record creation
+        try {
+          const historyResponse = await fetch('http://localhost:8088/api/history');
+          if (historyResponse.ok) {
+            previousChats = await historyResponse.json();
+          }
+        } catch (error) {
+          console.error('Error updating chat history:', error);
+        }
     } catch (error) {
         console.error('Error:', error);
         messages = [...messages, { 
@@ -435,7 +445,7 @@
   }
 
   .input-container {
-    padding: 1rem;
+    padding: 2rem;
     border-top: 1px solid #333;
     background-color: #2a2a2a;
     display: flex;

@@ -9,9 +9,11 @@
 </main>
 
 <style>
-  :global(body) {
+  :global(html, body) {
     margin: 0;
     padding: 0;
+    height: 100%;
+    overflow: hidden;  /* Prevents scrolling on the viewport */
     box-sizing: border-box;
   }
 
