@@ -68,7 +68,7 @@
       };
 
       // After models are loaded, check if saved model exists in available models
-      if (savedModel && availableModels[savedModel]) {
+      if (savedModel && availableModels[savedModel as keyof typeof availableModels]) {
         selectedModel = savedModel;
       }
     } catch (error) {
@@ -77,7 +77,7 @@
       availableModels = { ...LOCAL_MODELS };
       
       // Still check saved model against LOCAL_MODELS
-      if (savedModel && LOCAL_MODELS[savedModel]) {
+      if (savedModel && LOCAL_MODELS[savedModel as keyof typeof LOCAL_MODELS]) {
         selectedModel = savedModel;
       }
     }
