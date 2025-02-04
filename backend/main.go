@@ -60,5 +60,7 @@ func setupRoutes(r *gin.Engine, cc *controllers.ChatController) {
 		api.POST("/chat", cc.HandleChat)
 		api.POST("/chat/new", cc.HandleNewChat)
 		api.GET("/history", cc.HandleGetChats)
+		api.POST("/chat/:id/star", cc.HandleToggleChatStar)
+		api.POST("/message/:id/star", cc.HandleToggleMessageStar)
 	}
 }

@@ -25,11 +25,11 @@
   import 'prismjs/components/prism-sql';
   import 'prismjs/components/prism-graphql';
   import 'prismjs/components/prism-csharp';
-
-  export let message: {
-    Role: string;
-    Content: string;
-  };
+  import type { Message, NewMessage } from './types';  // You might need to create a types.ts file
+  
+  export let message: Message | NewMessage;
+  export let availableModels: Record<string, any>;  // Add this prop
+  export let onToggleStar: (messageId: number) => void;
 
   let contentElement: HTMLElement;
   let formattedContent: string;
@@ -91,13 +91,36 @@
 
   afterUpdate(highlightCode);
   onMount(highlightCode);
+
+  function getModelDisplayName(modelName: string): string {
+    return availableModels[modelName]?.name || modelName;
+  }
 </script>
 
-<div class="message {message.Role.toLowerCase()}">
+<div class="message {message.Role.toLowerCase()} {message.Starred ? 'starred' : ''}">
   <div class="avatar">
     {message.Role === 'user' ? '👤' : '🤖'}
   </div>
   <div class="content-wrapper">
+    <div class="message-header">
+      <span class="role">{message.Role}</span>
+      {#if message.ModelName}
+        <span class="model-tag">
+          {getModelDisplayName(message.ModelName)}
+        </span>
+      {/if}
+      {#if 'ID' in message}
+        <button 
+          class="star-button" 
+          on:click={() => onToggleStar(message.ID)}
+          title={message.Starred ? "Unstar message" : "Star message"}
+        >
+          <svg class="star-icon" class:filled={message.Starred} viewBox="0 0 24 24">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+          </svg>
+        </button>
+      {/if}
+    </div>
     <div class="content" bind:this={contentElement}>
       {@html formattedContent}
     </div>
@@ -110,9 +133,7 @@
     margin-bottom: 1rem;
     gap: 0.5rem;
     color: #e1e1e1;
-    align-self: flex-start;
     width: 100%;
-    max-height: 50vh; /* Limit maximum height */
   }
 
   .avatar {
@@ -130,8 +151,6 @@
     padding: 0.5rem 1rem;
     border-radius: 8px;
     width: 100%;
-    max-height: 60vh; /* Match message max-height */
-    overflow-y: auto; /* Enable vertical scrolling */
   }
 
   .content :global(pre) {
@@ -341,5 +360,57 @@
   .content :global(.token.regex),
   .content :global(.token.important) {
     color: #ffb86c;
+  }
+
+  .message-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .role {
+    text-transform: capitalize;
+    font-weight: 500;
+    color: #646cff;
+  }
+
+  .model-tag {
+    font-size: 0.8rem;
+    color: #888;
+    background: rgba(100, 108, 255, 0.1);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+  }
+
+  .star-button {
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: #888;
+    transition: color 0.2s;
+  }
+
+  .star-button:hover {
+    color: #646cff;
+  }
+
+  .star-icon {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    transition: fill 0.2s;
+  }
+
+  .star-icon.filled {
+    fill: #646cff;
+    stroke: #646cff;
+  }
+
+  .message.starred {
+    background-color: rgba(100, 108, 255, 0.05);
   }
 </style> 

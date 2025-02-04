@@ -35,10 +35,11 @@ type ChatRequest struct {
 }
 
 type Message struct {
-	ID      uint   `json:"id,omitempty"`
-	ChatID  uint   `json:"chat_id,omitempty"`
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	ID        uint   `json:"id,omitempty"`
+	ChatID    uint   `json:"chat_id,omitempty"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	ModelName string `json:"model_name"`
 }
 
 type ChatResponse struct {
@@ -108,9 +109,10 @@ func (s *OpenRouterService) Chat(req ChatRequest, chatID uint, w http.ResponseWr
 
 		// Create new message
 		message := models.Message{
-			ChatID:  chatID,
-			Role:    msg.Role,
-			Content: msg.Content,
+			ChatID:    chatID,
+			Role:      msg.Role,
+			Content:   msg.Content,
+			ModelName: req.Model,
 		}
 		if err := s.DB.Create(&message).Error; err != nil {
 			return fmt.Errorf("error saving message: %v", err)

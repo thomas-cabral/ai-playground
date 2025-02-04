@@ -41,7 +41,9 @@ func (cc *ChatController) HandleChat(c *gin.Context) {
 	}
 
 	if isNewChat {
-		chat = models.Chat{}
+		chat = models.Chat{
+			ModelName: chatReq.Model,
+		}
 		if err := cc.openRouterService.DB.Create(&chat).Error; err != nil {
 			fmt.Printf("Error creating chat: %v\n", err)
 			c.JSON(500, gin.H{"error": err.Error()})
@@ -78,8 +80,17 @@ func (cc *ChatController) HandleGetChats(c *gin.Context) {
 }
 
 func (cc *ChatController) HandleNewChat(c *gin.Context) {
-	// Create a new chat
-	chat := models.Chat{}
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	chat := models.Chat{
+		ModelName: req.Model,
+	}
 	if err := cc.openRouterService.DB.Create(&chat).Error; err != nil {
 		fmt.Printf("Error creating new chat: %v\n", err)
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -87,4 +98,44 @@ func (cc *ChatController) HandleNewChat(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"id": chat.ID})
+}
+
+func (cc *ChatController) HandleToggleChatStar(c *gin.Context) {
+	chatID := c.Param("id")
+	var chat models.Chat
+
+	if err := cc.openRouterService.DB.First(&chat, chatID).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Chat not found"})
+		return
+	}
+
+	// Toggle the starred status
+	chat.Starred = !chat.Starred
+
+	if err := cc.openRouterService.DB.Save(&chat).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(200, gin.H{"starred": chat.Starred})
+}
+
+func (cc *ChatController) HandleToggleMessageStar(c *gin.Context) {
+	messageID := c.Param("id")
+	var message models.Message
+
+	if err := cc.openRouterService.DB.First(&message, messageID).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Message not found"})
+		return
+	}
+
+	// Toggle the starred status
+	message.Starred = !message.Starred
+
+	if err := cc.openRouterService.DB.Save(&message).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(200, gin.H{"starred": message.Starred})
 }
