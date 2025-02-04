@@ -30,19 +30,26 @@ func (bm *BaseModel) BeforeUpdate(tx *gorm.DB) error {
 
 type Chat struct {
 	BaseModel
-	Messages  []Message `json:"messages"`
-	ModelName string    `json:"modelName"`
-	Starred   bool      `json:"starred" gorm:"default:false"`
+	Messages      []Message `json:"messages"`
+	ModelName     string    `json:"modelName"`
+	Starred       bool      `json:"starred" gorm:"default:false"`
+	ParentID      *uint     `json:"parentId"`                                    // ID of the parent chat this was forked from
+	ForkMessageID *uint     `json:"forkMessageId"`                               // ID of the message where the fork occurred
+	Parent        *Chat     `json:"parent" gorm:"foreignKey:ParentID"`           // Parent chat reference
+	Forks         []Chat    `json:"forks" gorm:"foreignKey:ParentID"`            // Child chat references
+	ForkMessage   *Message  `json:"forkMessage" gorm:"foreignKey:ForkMessageID"` // Reference to forked message
 }
 
 type Message struct {
-    BaseModel
-    ChatID           uint   `json:"chatId"`
-    Role             string `json:"role"`
-    Content          string `json:"content"`
-    ModelName        string `json:"modelName"`
-    Starred          bool   `json:"starred" gorm:"default:false"`
-    PromptTokens     int    `json:"promptTokens"`
-    CompletionTokens int    `json:"completionTokens"`
-    TotalTokens      int    `json:"totalTokens"`
+	BaseModel
+	ChatID           uint   `json:"chatId"`
+	Chat             *Chat  `json:"chat" gorm:"foreignKey:ChatID"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ModelName        string `json:"modelName"`
+	Starred          bool   `json:"starred" gorm:"default:false"`
+	PromptTokens     int    `json:"promptTokens"`
+	CompletionTokens int    `json:"completionTokens"`
+	TotalTokens      int    `json:"totalTokens"`
+	ForkedChats      []Chat `json:"forkedChats" gorm:"foreignKey:ForkMessageID"` // Chats forked from this message
 }
