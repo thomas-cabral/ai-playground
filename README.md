@@ -3,7 +3,7 @@
 Welcome to the **AI Playground** repository. This is a simple, open source project providing a real-time chat experience with a Go backend and a frontend built using Svelte, TypeScript, and Vite.
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
-[![License](https://img.shields.io/badge/license-MIT-blue)](#)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-orange)](#)
 
 ---
@@ -80,5 +80,8 @@ This repository features a straightforward AI Playground, created as a hobby pro
 
 
 ---
+
+## License
+This project is licensed under the [Apache License 2.0](LICENSE).
 
 *Thank you for checking out this project.*
