@@ -70,7 +70,7 @@ func (cc *ChatController) HandleChat(c *gin.Context) {
 
 func (cc *ChatController) HandleGetChats(c *gin.Context) {
 	var chats []models.Chat
-	if err := cc.openRouterService.DB.Preload("Messages").Find(&chats).Error; err != nil {
+	if err := cc.openRouterService.DB.Preload("Messages").Order("created_at desc").Find(&chats).Error; err != nil {
 		fmt.Printf("Error fetching chats: %v\n", err)
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

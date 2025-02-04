@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, afterUpdate, tick } from 'svelte';
   import ChatMessage from './ChatMessage.svelte';
 
   type Message = {
@@ -66,6 +66,35 @@
   let showChatHistory = false;
   let currentChatId: number | null = null;
   let modelSelectorFocused = false;
+
+  // Declare the reference to the messages container for sticky scrolling
+  let messagesContainer: HTMLDivElement;
+
+  let autoScroll = true; // Enable sticky scrolling by default
+
+  // Auto-scroll to the bottom when messages update if autoScroll is enabled
+  afterUpdate(() => {
+    if (messagesContainer && autoScroll) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  });
+
+  // Handle user scrolling to disable auto scrolling when the user scrolls up
+  function handleScroll() {
+    if (messagesContainer) {
+      const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
+      // If the user scrolls up (beyond a small threshold), disable autoScrolling
+      autoScroll = scrollTop + clientHeight >= scrollHeight - 50;
+    }
+  }
+
+  // Function to manually scroll to the bottom and re-enable auto scrolling
+  function scrollToBottom() {
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      autoScroll = true;
+    }
+  }
 
   onMount(async () => {
     const savedModel = localStorage.getItem('selectedModel');
@@ -160,95 +189,141 @@
     }
   }
 
+  async function updateChatHistory() {
+    try {
+        const historyResponse = await fetch('http://localhost:8088/api/history');
+        if (historyResponse.ok) {
+            const data = await historyResponse.json();
+            previousChats = data.map((chat: any) => ({
+                ID: chat.id,
+                Messages: chat.messages.map((msg: any) => ({
+                    ID: msg.id,
+                    ChatID: msg.chat_id,
+                    Role: msg.role,
+                    Content: msg.content,
+                    CreatedAt: msg.created_at,
+                    UpdatedAt: msg.updated_at,
+                    DeletedAt: msg.deleted_at,
+                    ModelName: msg.model_name,
+                    Starred: msg.starred
+                })),
+                CreatedAt: chat.created_at,
+                UpdatedAt: chat.updated_at,
+                DeletedAt: chat.deleted_at,
+                ModelName: chat.model_name,
+                Starred: chat.starred
+            }));
+        }
+    } catch (error) {
+        console.error('Error updating chat history:', error);
+    }
+  }
+
   async function handleSubmit() {
     if (!userInput.trim()) return;
 
     const newUserMessage = { 
-      Role: 'user', 
-      Content: userInput,
-      ModelName: selectedModel  // Add selected model to message
+        Role: 'user', 
+        Content: userInput,
+        ModelName: selectedModel
     };
-    messages = [...messages, newUserMessage];
-    const currentInput = userInput;
-    userInput = '';
-    isLoading = true;
+    
+    const maxRetries = 2;
+    let retryCount = 0;
+    let success = false;
 
-    try {
-        // First, if this is a new chat, create it
-        if (!currentChatId) {
-            const createChatResponse = await fetch('http://localhost:8088/api/chat/new', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: selectedModel
-                }),
-            });
-            
-            if (!createChatResponse.ok) {
-                throw new Error('Failed to create new chat');
+    while (retryCount <= maxRetries && !success) {
+        try {
+            if (retryCount > 0) {
+                console.log(`Retrying request (attempt ${retryCount + 1})`);
             }
-            
-            const chatData = await createChatResponse.json();
-            currentChatId = chatData.id;
-        }
 
-        // Now send the message
-        const response = await fetch('http://localhost:8088/api/chat', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
+            messages = [...messages, newUserMessage];
+            const currentInput = userInput;
+            userInput = '';
+            isLoading = true;
+
+            // Create new assistant message
+            messages = [...messages, { 
+                Role: 'assistant', 
+                Content: '',
+                ModelName: selectedModel 
+            } as NewMessage];
+
+            // Create the request body with the chat_id
+            const requestBody: {
+                model: string;
+                messages: { id: number | undefined; role: string; content: string; }[];
+                stream: boolean;
+                chat_id?: number;  // Make chat_id optional
+            } = {
                 model: selectedModel,
-                chat_id: currentChatId,
-                messages: messages.map(msg => ({
+                messages: messages.slice(0, -1).map(msg => ({
                     id: 'ID' in msg ? msg.ID : undefined,
                     role: msg.Role,
                     content: msg.Content
                 })),
-                stream: true,
-            }),
-        });
+                stream: true
+            };
 
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
+            // Only include chat_id if it exists
+            if (currentChatId !== null) {
+                requestBody.chat_id = currentChatId;
+            }
 
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No reader available');
+            const response = await fetch('http://localhost:8088/api/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestBody),
+            });
 
-        // Create new assistant message
-        messages = [...messages, { 
-          Role: 'assistant', 
-          Content: '',
-          ModelName: selectedModel 
-        } as NewMessage];
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
-        for await (const content of streamResponse(reader)) {
-            messages[messages.length - 1].Content += content;
-            messages = messages; // Trigger Svelte reactivity
-        }
-        
-        // Fetch updated chat history after new chat record creation
-        try {
-          const historyResponse = await fetch('http://localhost:8088/api/history');
-          if (historyResponse.ok) {
-            previousChats = await historyResponse.json();
-          }
+            const reader = response.body?.getReader();
+            if (!reader) throw new Error('No reader available');
+
+            let hasContent = false;
+            for await (const content of streamResponse(reader)) {
+                if (content.trim()) {
+                    hasContent = true;
+                    messages[messages.length - 1].Content += content;
+                    messages = messages;
+                }
+            }
+
+            if (!hasContent) {
+                // Remove empty message and retry
+                messages = messages.slice(0, -2); // Remove both user and assistant messages
+                if (retryCount === maxRetries) {
+                    messages = [...messages, newUserMessage, {
+                        Role: 'assistant',
+                        Content: 'Sorry, the model returned empty responses. Please try again later.',
+                        ModelName: selectedModel
+                    }];
+                }
+                throw new Error('Empty response');
+            }
+
+            success = true;
+            await updateChatHistory();
+
         } catch (error) {
-          console.error('Error updating chat history:', error);
+            console.error(`Error (attempt ${retryCount + 1}):`, error);
+            if (retryCount === maxRetries) {
+                messages = messages.slice(0, -2); // Remove failed messages
+                messages = [...messages, newUserMessage, {
+                    Role: 'assistant',
+                    Content: 'Sorry, there was an error processing your request after multiple attempts.',
+                    ModelName: selectedModel
+                }];
+            }
+            retryCount++;
         }
-    } catch (error) {
-        console.error('Error:', error);
-        messages = [...messages, { 
-            Role: 'assistant', 
-            Content: 'Sorry, there was an error processing your request.' 
-        }];
-    } finally {
-        isLoading = false;
     }
+
+    isLoading = false;
   }
 
   function handleModelSelect(modelId: string) {
@@ -552,7 +627,7 @@
       </div>
     </div>
 
-    <div class="messages">
+    <div class="messages" bind:this={messagesContainer} on:scroll={handleScroll}>
       {#each messages as message}
         <div class="message-section">
           <div class="message-container">
@@ -565,6 +640,15 @@
         </div>
       {/each}
     </div>
+
+    {#if !autoScroll && messages.length > 0}
+      <button
+        class="scroll-to-bottom-button"
+        on:click={scrollToBottom}
+      >
+        Scroll to bottom
+      </button>
+    {/if}
 
     <form on:submit|preventDefault={handleSubmit}>
       <div class="input-container">
@@ -1054,5 +1138,35 @@
 
   .chat-history-item.starred {
     background-color: rgba(100, 108, 255, 0.1);
+  }
+
+  .scroll-to-bottom-button {
+    padding: 0.5rem;
+    background-color: #646cff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    position: fixed;
+    bottom: 100px;
+    right: 20px;
+    z-index: 100;
+  }
+
+  .scroll-to-bottom-button:hover {
+    background-color: #747bff;
+  }
+
+  .scroll-to-bottom {
+    position: fixed;
+    bottom: 80px; /* Positioned above the fixed input container */
+    right: 20px;
+    padding: 0.5rem 1rem;
+    background-color: #646cff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 110;
   }
 </style> 
