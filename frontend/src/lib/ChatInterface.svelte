@@ -66,6 +66,7 @@
   let showChatHistory = false;
   let currentChatId: number | null = null;
   let modelSelectorFocused = false;
+  let webSearchEnabled = false;
 
   // Declare the reference to the messages container for sticky scrolling
   let messagesContainer: HTMLDivElement;
@@ -257,7 +258,7 @@
                 stream: boolean;
                 chat_id?: number;  // Make chat_id optional
             } = {
-                model: selectedModel,
+                model: webSearchEnabled ? `${selectedModel}:online` : selectedModel,
                 messages: messages.slice(0, -1).map(msg => ({
                     id: 'ID' in msg ? msg.ID : undefined,
                     role: msg.Role,
@@ -533,54 +534,68 @@
       <div class="model-section">
         <div class="model-selector">
           <label for="model-search">Model:</label>
-          <div class="dropdown-container">
-            <input
-              id="model-search"
-              type="text"
-              placeholder="Search models..."
-              value={modelSelectorFocused ? searchTerm : selectedModelName}
-              on:input={(e) => searchTerm = e.currentTarget.value}
-              bind:this={searchInput}
-              on:focus={handleSearchFocus}
-              on:blur={handleSearchBlur}
-              class="search-input"
-              class:focused={modelSelectorFocused}
-            />
-            {#if isDropdownOpen}
-              <div class="dropdown-list">
-                {#each Object.entries(filteredModels) as [id, model]}
-                  <div
-                    class="dropdown-item"
-                    class:selected={id === selectedModel}
-                    on:mousedown={() => handleModelSelect(id)}
-                    role="button"
-                    tabindex="0"
-                  >
-                    <div class="model-info">
-                      <div class="model-name-container">
-                        <span class="model-name">{model.name}</span>
-                        {#if model.description}
-                          <span class="info-icon" title={model.description}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                              <circle cx="12" cy="12" r="10"></circle>
-                              <line x1="12" y1="16" x2="12" y2="12"></line>
-                              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                            </svg>
-                          </span>
-                        {/if}
+          <div class="model-controls">
+            <div class="dropdown-container">
+              <input
+                id="model-search"
+                type="text"
+                placeholder="Search models..."
+                value={modelSelectorFocused ? searchTerm : selectedModelName}
+                on:input={(e) => searchTerm = e.currentTarget.value}
+                bind:this={searchInput}
+                on:focus={handleSearchFocus}
+                on:blur={handleSearchBlur}
+                class="search-input"
+                class:focused={modelSelectorFocused}
+              />
+              {#if isDropdownOpen}
+                <div class="dropdown-list">
+                  {#each Object.entries(filteredModels) as [id, model]}
+                    <div
+                      class="dropdown-item"
+                      class:selected={id === selectedModel}
+                      on:mousedown={() => handleModelSelect(id)}
+                      role="button"
+                      tabindex="0"
+                    >
+                      <div class="model-info">
+                        <div class="model-name-container">
+                          <span class="model-name">{model.name}</span>
+                          {#if model.description}
+                            <span class="info-icon" title={model.description}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                              </svg>
+                            </span>
+                          {/if}
+                        </div>
+                        <div class="model-pricing">
+                          <span class="price-tag">Input: {formatPrice(model.pricing.prompt)}</span>
+                          <span class="price-tag">Output: {formatPrice(model.pricing.completion)}</span>
+                        </div>
                       </div>
-                      <div class="model-pricing">
-                        <span class="price-tag">Input: {formatPrice(model.pricing.prompt)}</span>
-                        <span class="price-tag">Output: {formatPrice(model.pricing.completion)}</span>
-                      </div>
+                      {#if id === selectedModel}
+                        <span class="checkmark">✓</span>
+                      {/if}
                     </div>
-                    {#if id === selectedModel}
-                      <span class="checkmark">✓</span>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
+                  {/each}
+                </div>
+              {/if}
+            </div>
+            <button 
+              class="web-search-toggle"
+              class:enabled={webSearchEnabled}
+              on:click={() => webSearchEnabled = !webSearchEnabled}
+              title={webSearchEnabled ? "Disable web search" : "Enable web search"}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+            </button>
           </div>
         </div>
         {#if selectedModel && availableModels[selectedModel]}
@@ -831,9 +846,16 @@
     cursor: not-allowed;
   }
 
+  .model-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    width: 100%;
+  }
+
   .dropdown-container {
     position: relative;
-    width: 100%;
+    flex: 1;
   }
 
   .search-input {
@@ -1168,5 +1190,38 @@
     border-radius: 4px;
     cursor: pointer;
     z-index: 110;
+  }
+
+  .web-search-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem;
+    background-color: #2a2a2a;
+    color: #888;
+    border: 1px solid #444;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .web-search-toggle:hover {
+    background-color: #3a3a3a;
+    border-color: #646cff;
+  }
+
+  .web-search-toggle.enabled {
+    background-color: rgba(100, 108, 255, 0.1);
+    color: #646cff;
+    border-color: #646cff;
+  }
+
+  .web-search-toggle svg {
+    transition: transform 0.2s ease;
+  }
+
+  .web-search-toggle.enabled svg {
+    transform: scale(1.1);
   }
 </style> 
