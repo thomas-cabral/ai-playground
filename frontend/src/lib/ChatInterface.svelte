@@ -1,57 +1,7 @@
 <script lang="ts">
   import { onMount, afterUpdate, tick } from 'svelte';
   import ChatMessage from './ChatMessage.svelte';
-
-  type Message = {
-    ID: number;
-    ChatID: number;
-    Role: string;
-    Content: string;
-    CreatedAt: string;
-    UpdatedAt: string;
-    DeletedAt: string | null;
-    ModelName: string;
-    Starred: boolean;
-  };
-
-  // Add this new type for messages being composed
-  type NewMessage = {
-    Role: string;
-    Content: string;
-    ID?: number;  // Add optional ID field
-    ModelName?: string;  // Add this field
-  };
-
-  type Chat = {
-    ID: number;
-    Messages: Message[];
-    CreatedAt: string;
-    UpdatedAt: string;
-    DeletedAt: string | null;
-    ModelName: string;  // Updated from Model to ModelName
-    Starred: boolean;
-  };
-
-  type ModelPricing = {
-    prompt: string;
-    completion: string;
-    image: string;
-    request: string;
-  };
-
-  type ModelArchitecture = {
-    modality: string;
-    tokenizer: string;
-    instruct_type: string | null;
-  };
-
-  type OpenRouterModel = {
-    id: string;
-    name: string;
-    description?: string;
-    pricing: ModelPricing;
-    architecture: ModelArchitecture;
-  };
+  import type { Message, NewMessage, Chat, OpenRouterModel, TokenUsage } from './types';
 
   let availableModels: Record<string, OpenRouterModel> = {};
   let messages: (Message | NewMessage)[] = [];
@@ -68,12 +18,10 @@
   let modelSelectorFocused = false;
   let webSearchEnabled = false;
 
-  // Declare the reference to the messages container for sticky scrolling
   let messagesContainer: HTMLDivElement;
 
-  let autoScroll = true; // Enable sticky scrolling by default
+  let autoScroll = true;
 
-  // Auto-scroll to the bottom when messages update if autoScroll is enabled
   afterUpdate(() => {
     if (messagesContainer && autoScroll) {
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -97,8 +45,31 @@
     }
   }
 
+  function updateUrl(chatId: string | null) {
+    const url = chatId ? `?chat=${chatId}` : window.location.pathname;
+    window.history.replaceState({}, '', url);
+  }
+
+  async function loadChatById(chatId: string) {
+    try {
+      const response = await fetch(`http://localhost:8088/api/chat/${chatId}`);
+      if (response.ok) {
+        const chat = await response.json();
+        loadChat(chat);
+      } else {
+        console.error('Chat not found');
+        updateUrl(null);
+      }
+    } catch (error) {
+      console.error('Error loading chat:', error);
+      updateUrl(null);
+    }
+  }
+
   onMount(async () => {
     const savedModel = localStorage.getItem('selectedModel');
+    const urlParams = new URLSearchParams(window.location.search);
+    const chatId = urlParams.get('chat');
     
     try {
       const response = await fetch('https://openrouter.ai/api/v1/models');
@@ -131,46 +102,79 @@
 
       // Initialize filtered models
       filteredModels = { ...availableModels };
+
+      // Fetch chat history
+      try {
+        const response = await fetch('http://localhost:8088/api/history');
+        if (response.ok) {
+          const data = await response.json();
+          previousChats = Object.values(data).map((chat: any) => ({
+            id: chat.id,
+            messages: chat.messages.map((msg: any) => ({
+              id: msg.id,
+              chatId: msg.chatId,
+              role: msg.role,
+              content: msg.content,
+              createdAt: msg.createdAt,
+              updatedAt: msg.updatedAt,
+              deletedAt: msg.deletedAt,
+              modelName: msg.modelName,
+              starred: msg.starred,
+              tokenUsage: ('promptTokens' in msg && 'completionTokens' in msg && 'totalTokens' in msg)
+                ? {
+                    promptTokens: msg.promptTokens,
+                    completionTokens: msg.completionTokens,
+                    totalTokens: msg.totalTokens
+                  }
+                : undefined
+            })),
+            createdAt: chat.createdAt,
+            updatedAt: chat.updatedAt,
+            deletedAt: chat.deletedAt,
+            modelName: chat.modelName,
+            starred: chat.starred
+          }));
+
+          // Load chat from URL if present
+          if (chatId) {
+            await loadChatById(chatId);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching chat history:', error);
+      }
     } catch (error) {
       console.error('Error fetching OpenRouter models:', error);
       // Show error state or fallback
     }
-
-    // Fetch chat history
-    try {
-      const response = await fetch('http://localhost:8088/api/history');
-      if (response.ok) {
-        const data = await response.json();
-        // Convert the object of chats into an array
-        previousChats = Object.values(data).map((chat: any) => ({
-          ID: chat.id,
-          Messages: chat.messages.map((msg: any) => ({
-            ID: msg.id,
-            ChatID: msg.chat_id,
-            Role: msg.role,
-            Content: msg.content,
-            CreatedAt: msg.created_at,
-            UpdatedAt: msg.updated_at,
-            DeletedAt: msg.deleted_at,
-            ModelName: msg.model_name,
-            Starred: msg.starred
-          })),
-          CreatedAt: chat.created_at,
-          UpdatedAt: chat.updated_at,
-          DeletedAt: chat.deleted_at,
-          ModelName: chat.model_name,
-          Starred: chat.starred
-        }));
-      }
-    } catch (error) {
-      console.error('Error fetching chat history:', error);
-    }
   });
 
   async function* streamResponse(reader: ReadableStreamDefaultReader<Uint8Array>) {
+    let lastChunk = '';
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // Process any remaining data in lastChunk
+        if (lastChunk) {
+          try {
+            const data = JSON.parse(lastChunk);
+            if (data.usage) {
+              // Return token usage data
+              yield {
+                type: 'usage',
+                usage: {
+                  promptTokens: data.usage.prompt_tokens,
+                  completionTokens: data.usage.completion_tokens,
+                  totalTokens: data.usage.total_tokens
+                }
+              };
+            }
+          } catch (e) {
+            console.error('Error parsing final chunk:', e);
+          }
+        }
+        break;
+      }
 
       const text = new TextDecoder().decode(value);
       const lines = text.split('\n').filter(line => line.trim() !== '');
@@ -180,43 +184,63 @@
           try {
             const data = JSON.parse(line.slice(6));
             if (data.choices?.[0]?.delta?.content) {
-              yield data.choices[0].delta.content;
+              yield {
+                type: 'content',
+                content: data.choices[0].delta.content
+              };
+            } else if (data.usage) {
+              yield {
+                type: 'usage',
+                usage: {
+                  promptTokens: data.usage.prompt_tokens,
+                  completionTokens: data.usage.completion_tokens,
+                  totalTokens: data.usage.total_tokens
+                }
+              };
             }
           } catch (e) {
             console.error('Error parsing JSON:', e);
           }
         }
       }
+      lastChunk = lines[lines.length - 1];
     }
   }
 
   async function updateChatHistory() {
     try {
-        const historyResponse = await fetch('http://localhost:8088/api/history');
-        if (historyResponse.ok) {
-            const data = await historyResponse.json();
-            previousChats = data.map((chat: any) => ({
-                ID: chat.id,
-                Messages: chat.messages.map((msg: any) => ({
-                    ID: msg.id,
-                    ChatID: msg.chat_id,
-                    Role: msg.role,
-                    Content: msg.content,
-                    CreatedAt: msg.created_at,
-                    UpdatedAt: msg.updated_at,
-                    DeletedAt: msg.deleted_at,
-                    ModelName: msg.model_name,
-                    Starred: msg.starred
-                })),
-                CreatedAt: chat.created_at,
-                UpdatedAt: chat.updated_at,
-                DeletedAt: chat.deleted_at,
-                ModelName: chat.model_name,
-                Starred: chat.starred
-            }));
-        }
+      const historyResponse = await fetch('http://localhost:8088/api/history');
+      if (historyResponse.ok) {
+        const data = await historyResponse.json();
+        previousChats = data.map((chat: any) => ({
+          id: chat.id,
+          messages: chat.messages.map((msg: Message) => ({
+            id: msg.id,
+            chatId: msg.chatId,
+            role: msg.role,
+            content: msg.content,
+            createdAt: msg.createdAt,
+            updatedAt: msg.updatedAt,
+            deletedAt: msg.deletedAt,
+            modelName: msg.modelName,
+            starred: msg.starred,
+            tokenUsage: ('promptTokens' in msg && 'completionTokens' in msg && 'totalTokens' in msg)
+              ? {
+                  promptTokens: msg.promptTokens,
+                  completionTokens: msg.completionTokens,
+                  totalTokens: msg.totalTokens
+                }
+              : undefined
+          })),
+          createdAt: chat.createdAt,
+          updatedAt: chat.updatedAt,
+          deletedAt: chat.deletedAt,
+          modelName: chat.modelName,
+          starred: chat.starred
+        }));
+      }
     } catch (error) {
-        console.error('Error updating chat history:', error);
+      console.error('Error updating chat history:', error);
     }
   }
 
@@ -224,9 +248,9 @@
     if (!userInput.trim()) return;
 
     const newUserMessage = { 
-        Role: 'user', 
-        Content: userInput,
-        ModelName: selectedModel
+        role: 'user', 
+        content: userInput,
+        modelName: selectedModel
     };
     
     const maxRetries = 2;
@@ -239,6 +263,29 @@
                 console.log(`Retrying request (attempt ${retryCount + 1})`);
             }
 
+            // If this is a new chat, create it first
+            if (currentChatId === null) {
+                try {
+                    const response = await fetch('http://localhost:8088/api/chat/new', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            model: selectedModel
+                        }),
+                    });
+
+                    if (!response.ok) throw new Error('Failed to create new chat');
+                    const data = await response.json();
+                    currentChatId = data.id;
+                    updateUrl(currentChatId?.toString() || null);
+                } catch (error) {
+                    console.error('Error creating new chat:', error);
+                    throw error;
+                }
+            }
+
             messages = [...messages, newUserMessage];
             const currentInput = userInput;
             userInput = '';
@@ -246,31 +293,22 @@
 
             // Create new assistant message
             messages = [...messages, { 
-                Role: 'assistant', 
-                Content: '',
-                ModelName: selectedModel 
+                role: 'assistant', 
+                content: '',
+                modelName: selectedModel 
             } as NewMessage];
 
             // Create the request body with the chat_id
-            const requestBody: {
-                model: string;
-                messages: { id: number | undefined; role: string; content: string; }[];
-                stream: boolean;
-                chat_id?: number;  // Make chat_id optional
-            } = {
+            const requestBody = {
                 model: webSearchEnabled ? `${selectedModel}:online` : selectedModel,
                 messages: messages.slice(0, -1).map(msg => ({
-                    id: 'ID' in msg ? msg.ID : undefined,
-                    role: msg.Role,
-                    content: msg.Content
+                    id: 'ID' in msg ? msg.id : undefined,
+                    role: msg.role,
+                    content: msg.content
                 })),
-                stream: true
+                stream: true,
+                chat_id: currentChatId  // Always include chat_id now
             };
-
-            // Only include chat_id if it exists
-            if (currentChatId !== null) {
-                requestBody.chat_id = currentChatId;
-            }
 
             const response = await fetch('http://localhost:8088/api/chat', {
                 method: 'POST',
@@ -286,10 +324,13 @@
             if (!reader) throw new Error('No reader available');
 
             let hasContent = false;
-            for await (const content of streamResponse(reader)) {
-                if (content.trim()) {
+            for await (const chunk of streamResponse(reader)) {
+                if (chunk.type === 'content' && chunk.content.trim()) {
                     hasContent = true;
-                    messages[messages.length - 1].Content += content;
+                    messages[messages.length - 1].content += chunk.content;
+                    messages = messages;
+                } else if (chunk.type === 'usage') {
+                    messages[messages.length - 1].tokenUsage = chunk.usage;
                     messages = messages;
                 }
             }
@@ -299,9 +340,9 @@
                 messages = messages.slice(0, -2); // Remove both user and assistant messages
                 if (retryCount === maxRetries) {
                     messages = [...messages, newUserMessage, {
-                        Role: 'assistant',
-                        Content: 'Sorry, the model returned empty responses. Please try again later.',
-                        ModelName: selectedModel
+                        role: 'assistant',
+                        content: 'Sorry, the model returned empty responses. Please try again later.',
+                        modelName: selectedModel
                     }];
                 }
                 throw new Error('Empty response');
@@ -310,14 +351,27 @@
             success = true;
             await updateChatHistory();
 
+            // After successful message submission, if this is a new chat
+            if (currentChatId === null && messages.length === 2) { // First user+assistant message pair
+                const chatResponse = await fetch('http://localhost:8088/api/history');
+                if (chatResponse.ok) {
+                    const chats = await chatResponse.json();
+                    const newChat = chats[chats.length - 1];
+                    if (newChat) {
+                        currentChatId = newChat.id;
+                        updateUrl(newChat.id.toString());
+                    }
+                }
+            }
+
         } catch (error) {
             console.error(`Error (attempt ${retryCount + 1}):`, error);
             if (retryCount === maxRetries) {
                 messages = messages.slice(0, -2); // Remove failed messages
                 messages = [...messages, newUserMessage, {
-                    Role: 'assistant',
-                    Content: 'Sorry, there was an error processing your request after multiple attempts.',
-                    ModelName: selectedModel
+                    role: 'assistant',
+                    content: 'Sorry, there was an error processing your request after multiple attempts.',
+                    modelName: selectedModel
                 }];
             }
             retryCount++;
@@ -388,18 +442,20 @@
   $: selectedModelName = availableModels[selectedModel]?.name || selectedModel;
 
   function loadChat(chat: Chat) {
-    currentChatId = chat.ID;
+    currentChatId = chat.id;
+    updateUrl(chat.id.toString());
     // Update selected model to match the chat's model
-    if (chat.ModelName && availableModels[chat.ModelName]) {
-        selectedModel = chat.ModelName;
-        localStorage.setItem('selectedModel', chat.ModelName);
+    if (chat.modelName && availableModels[chat.modelName]) {
+        selectedModel = chat.modelName;
+        localStorage.setItem('selectedModel', chat.modelName);
     }
-    messages = chat.Messages.map(msg => ({
-        Role: msg.Role,
-        Content: msg.Content,
-        ID: msg.ID,
-        ModelName: msg.ModelName || chat.ModelName, // Include ModelName from message or chat
-        Starred: msg.Starred
+    messages = chat.messages.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+        id: msg.id,
+        modelName: msg.modelName || chat.modelName, // Include ModelName from message or chat
+        starred: msg.starred,
+        tokenUsage: msg.tokenUsage
     } as NewMessage));
     showChatHistory = false;
   }
@@ -411,6 +467,7 @@
   function startNewChat() {
     messages = [];
     currentChatId = null;
+    updateUrl(null);
     showChatHistory = false;
   }
 
@@ -429,6 +486,25 @@
     return modality.replace('->', ' → ');
   }
 
+  // Helper function to calculate cost from token usage and pricing
+  function calculateCost(
+    tokenUsage: TokenUsage,
+    pricing: { prompt: string; completion: string }
+  ): { promptCost: number; completionCost: number; totalCost: number } {
+    const promptCost = tokenUsage.promptTokens * parseFloat(pricing.prompt);
+    const completionCost = tokenUsage.completionTokens * parseFloat(pricing.completion);
+    return {
+      promptCost,
+      completionCost,
+      totalCost: promptCost + completionCost
+    };
+  }
+
+  // Helper function to format cost as currency
+  function formatCost(cost: number): string {
+    return `$${cost.toFixed(6)}`;
+  }
+
   async function toggleChatStar(chatId: number) {
     try {
         const response = await fetch(`http://localhost:8088/api/chat/${chatId}/star`, {
@@ -439,7 +515,7 @@
             const data = await response.json();
             // Update the chat's starred status in the previousChats array
             previousChats = previousChats.map(chat => 
-                chat.ID === chatId ? { ...chat, Starred: data.starred } : chat
+                chat.id === chatId ? { ...chat, Starred: data.starred } : chat
             );
         }
     } catch (error) {
@@ -457,11 +533,74 @@
             const data = await response.json();
             // Update the message's starred status in the messages array
             messages = messages.map(msg => 
-                'ID' in msg && msg.ID === messageId ? { ...msg, Starred: data.starred } : msg
+                'ID' in msg && msg.id === messageId ? { ...msg, starred: data.starred } : msg
             );
         }
     } catch (error) {
         console.error('Error toggling message star:', error);
+    }
+  }
+
+  // Add this helper function to calculate total tokens for a chat
+  function calculateChatTokens(chat: Chat): TokenUsage {
+    return chat.messages.reduce((total, msg) => {
+      if (msg.tokenUsage) {
+        return {
+          promptTokens: total.promptTokens + msg.tokenUsage.promptTokens,
+          completionTokens: total.completionTokens + msg.tokenUsage.completionTokens,
+          totalTokens: total.totalTokens + msg.tokenUsage.totalTokens
+        };
+      }
+      return total;
+    }, { promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  }
+
+  // Add window popstate event listener to handle browser back/forward
+  onMount(() => {
+    window.addEventListener('popstate', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const chatId = urlParams.get('chat');
+      if (chatId) {
+        loadChatById(chatId);
+      } else {
+        startNewChat();
+      }
+    });
+  });
+
+  // Add this function to handle textarea auto-resize
+  function autoResize(e: Event) {
+    const textarea = e.target as HTMLTextAreaElement;
+    // Reset height to auto to get the correct scrollHeight
+    textarea.style.height = 'auto';
+    // Set new height based on scrollHeight, capped at 6 lines
+    const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight);
+    const maxHeight = lineHeight * 6; // 6 lines
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+  }
+
+  // Add this function after the toggleChatStar function
+  async function deleteChat(chatId: number) {
+    if (!confirm('Are you sure you want to delete this chat?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`http://localhost:8088/api/chat/${chatId}`, {
+            method: 'DELETE',
+        });
+        
+        if (response.ok) {
+            // Remove the chat from the previousChats array
+            previousChats = previousChats.filter(chat => chat.id !== chatId);
+            
+            // If we're currently viewing the deleted chat, start a new one
+            if (currentChatId === chatId) {
+                startNewChat();
+            }
+        }
+    } catch (error) {
+        console.error('Error deleting chat:', error);
     }
   }
 </script>
@@ -472,26 +611,12 @@
   <div class="sidebar" class:hidden={!showChatHistory}>
     <div class="sidebar-header">
       <h3>Chat History</h3>
-      <div class="sidebar-buttons">
-        <button 
-          class="new-chat-button" 
-          on:click={startNewChat}
-        >
-          + New Chat
-        </button>
-        <button 
-          class="history-button" 
-          on:click={() => showChatHistory = !showChatHistory}
-        >
-          {showChatHistory ? '←' : '→'}
-        </button>
-      </div>
     </div>
     <div class="chat-history">
-      {#each [...previousChats].sort((a, b) => new Date(b.CreatedAt).getTime() - new Date(a.CreatedAt).getTime()) as chat}
+      {#each [...previousChats].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) as chat}
         <div 
           class="chat-history-item" 
-          class:starred={chat.Starred}
+          class:starred={chat.starred}
           on:click={() => loadChat(chat)}
           on:keydown={(e) => e.key === 'Enter' && loadChat(chat)}
           role="button"
@@ -499,24 +624,52 @@
         >
           <div class="chat-preview">
             <div class="chat-header">
-              <span class="chat-date">{formatDate(chat.CreatedAt)}</span>
-              <button 
-                class="star-button" 
-                aria-label={chat.Starred ? "Unstar chat" : "Star chat"}
-                on:click|stopPropagation={() => toggleChatStar(chat.ID)}
-                title={chat.Starred ? "Unstar chat" : "Star chat"}
-              >
-                <svg class="star-icon" class:filled={chat.Starred} viewBox="0 0 24 24">
-                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                </svg>
-              </button>
+              <span class="chat-date">{formatDate(chat.createdAt)}</span>
+              <div class="chat-actions">
+                <button 
+                  class="star-button" 
+                  aria-label={chat.starred ? "Unstar chat" : "Star chat"}
+                  on:click|stopPropagation={() => toggleChatStar(chat.id)}
+                  title={chat.starred ? "Unstar chat" : "Star chat"}
+                >
+                  <svg class="star-icon" class:filled={chat.starred} viewBox="0 0 24 24">
+                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                  </svg>
+                </button>
+                <button 
+                  class="delete-button" 
+                  aria-label="Delete chat"
+                  on:click|stopPropagation={() => deleteChat(chat.id)}
+                  title="Delete chat"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                </button>
+              </div>
             </div>
-            {#if chat.ModelName}
-              <span class="chat-model">{availableModels[chat.ModelName]?.name || chat.ModelName}</span>
+            {#if chat.modelName}
+              <span class="chat-model">{availableModels[chat.modelName]?.name || chat.modelName}</span>
             {/if}
             <span class="chat-snippet">
-              {chat.Messages?.[0]?.Content?.slice(0, 50) || 'Empty chat'}...
+              {chat.messages?.[0]?.content?.slice(0, 50) || 'Empty chat'}...
             </span>
+            {#if chat.messages.length > 0}
+              <div class="chat-tokens">
+                {#if chat.messages.some(msg => msg.tokenUsage)}
+                  {@const tokens = calculateChatTokens(chat)}
+                  <span title="Total tokens used in chat">
+                    🔤 {tokens.totalTokens.toLocaleString()}
+                  </span>
+                  {#if availableModels[chat.modelName]}
+                    {@const cost = calculateCost(tokens, availableModels[chat.modelName].pricing)}
+                    <span title="Total cost">
+                      💲 {formatCost(cost.totalCost)}
+                    </span>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
           </div>
         </div>
       {/each}
@@ -525,12 +678,20 @@
 
   <div class="main-content">
     <div class="header">
-      <button 
-        class="history-button" 
-        on:click={() => showChatHistory = !showChatHistory}
-      >
-        {showChatHistory ? '←' : '→'}
-      </button>
+      <div class="header-controls">
+        <button 
+          class="history-button" 
+          on:click={() => showChatHistory = !showChatHistory}
+        >
+          {showChatHistory ? '←' : '→'}
+        </button>
+        <button 
+          class="new-chat-button" 
+          on:click={startNewChat}
+        >
+          + New Chat
+        </button>
+      </div>
       <div class="model-section">
         <div class="model-selector">
           <label for="model-search">Model:</label>
@@ -588,6 +749,7 @@
               class="web-search-toggle"
               class:enabled={webSearchEnabled}
               on:click={() => webSearchEnabled = !webSearchEnabled}
+              aria-label={webSearchEnabled ? "Disable web search" : "Enable web search"}
               title={webSearchEnabled ? "Disable web search" : "Enable web search"}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -643,6 +805,23 @@
     </div>
 
     <div class="messages" bind:this={messagesContainer} on:scroll={handleScroll}>
+      {#if messages.length === 0}
+        <div class="empty-state">
+          <div class="empty-state-content">
+            <h2>Welcome to the AI Playground</h2>
+            <p>Start a conversation by typing your message below.</p>
+            <div class="empty-state-tips">
+              <h3>Tips:</h3>
+              <ul>
+                <li>Choose a model from the dropdown above</li>
+                <li>Toggle web search for up-to-date information</li>
+                <li>Use Shift+Enter for multi-line messages</li>
+                <li>Access chat history using the sidebar</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      {/if}
       {#each messages as message}
         <div class="message-section">
           <div class="message-container">
@@ -667,12 +846,19 @@
 
     <form on:submit|preventDefault={handleSubmit}>
       <div class="input-container">
-        <input
-          type="text"
+        <textarea
           bind:value={userInput}
-          placeholder="Type your message..."
+          placeholder="Type your message... (Shift+Enter for new line)"
           disabled={isLoading}
-        />
+          on:keydown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              if (userInput.trim()) handleSubmit();
+            }
+          }}
+          on:input={autoResize}
+          rows="1"
+        ></textarea>
         <button type="submit" disabled={isLoading || !userInput.trim()}>
           Send
         </button>
@@ -696,11 +882,13 @@
     display: flex;
     flex-direction: column;
     transition: width 0.3s ease;
+    --sidebar-visible: 1;
   }
 
   .sidebar.hidden {
     width: 0;
     overflow: hidden;
+    --sidebar-visible: 0;
   }
 
   .sidebar-header {
@@ -725,6 +913,7 @@
     flex-direction: column;
     min-width: 0;
     overflow: hidden;
+    height: 100%;
   }
 
   .chat-history {
@@ -746,6 +935,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    cursor: pointer;
   }
 
   .chat-date {
@@ -766,14 +956,14 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    padding-bottom: 100px; /* Add padding to prevent overlap with fixed form */
+    padding: 1rem;
   }
 
   .message-section {
     width: 100%;
     border-bottom: 1px solid #333;
     background-color: #1f1f1f;
-    flex-shrink: 0; /* Add this to prevent shrinking */
+    flex-shrink: 0;
   }
 
   .message-section:nth-child(even) {
@@ -794,16 +984,25 @@
     align-items: flex-start;
     gap: 1rem;
     flex-shrink: 0;
+    background-color: #2a2a2a;
+  }
+
+  .header-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    height: 32px;
   }
 
   .input-container {
-    padding: 1.5rem 2rem;
+    padding: 1.5rem 2rem 2rem;
     border-top: 2px solid #333;
     background-color: #2a2a2a;
     display: flex;
     gap: 0.5rem;
     width: 100%;
     box-shadow: 0 -4px 6px rgba(0, 0, 0, 0.1);
+    align-items: flex-start;
   }
 
   .model-section {
@@ -823,22 +1022,74 @@
     flex-grow: 1;
   }
 
-  input {
+  textarea {
     flex-grow: 1;
     padding: 0.75rem 1rem;
     margin-right: 0.5rem;
     border: 1px solid #ccc;
     border-radius: 4px;
     font-size: 0.95rem;
+    min-height: 32px;
+    max-height: calc(1.2em * 6 + 1.5rem);
+    line-height: 1.2;
+    box-sizing: border-box;
+    resize: none;
+    overflow-y: auto;
+    font-family: inherit;
+    background-color: #fff;
+    transition: height 0.1s ease;
+  }
+
+  textarea:disabled {
+    background-color: #eee;
+    cursor: not-allowed;
+  }
+
+  /* Add smooth scrollbar for textarea */
+  textarea {
+    scrollbar-width: thin;
+    scrollbar-color: #646cff #ffffff;
+  }
+
+  textarea::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  textarea::-webkit-scrollbar-track {
+    background: #ffffff;
+  }
+
+  textarea::-webkit-scrollbar-thumb {
+    background-color: #646cff;
+    border-radius: 4px;
+    border: 2px solid #ffffff;
+  }
+
+  /* Update the button styles */
+  .input-container button {
+    padding: 0 1rem;
+    height: calc(32px + 0.5rem); /* Reduced from 1.5rem to 0.5rem for better proportion */
+    align-self: flex-start; /* Changed from stretch to flex-start */
+    margin-top: 1px; /* Slight adjustment to align with textarea */
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   button {
-    padding: 0.5rem 1rem;
+    padding: 0 0.75rem;
     background-color: #646cff;
     color: white;
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    min-width: fit-content;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   button:disabled {
@@ -969,7 +1220,7 @@
   }
 
   .history-button {
-    padding: 0.5rem;
+    padding: 0;
     min-width: 32px;
     height: 32px;
     display: flex;
@@ -981,14 +1232,8 @@
     background-color: #3a3a3a;
   }
 
-  .sidebar-buttons {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
   .new-chat-button {
-    padding: 0.5rem 0.75rem;
+    padding: 0 0.75rem;
     background-color: #646cff;
     color: white;
     border: none;
@@ -997,6 +1242,9 @@
     font-size: 0.8rem;
     white-space: nowrap;
     min-width: fit-content;
+    height: 32px;
+    display: flex;
+    align-items: center;
   }
 
   .new-chat-button:hover {
@@ -1049,23 +1297,8 @@
   }
 
   form {
-    position: fixed;
-    bottom: 0;
-    left: 300px;
-    right: 0;
-    z-index: 100;
     background-color: #1f1f1f;
-  }
-
-  /* Update the sidebar hidden state */
-  .sidebar.hidden + .main-content form {
-    left: 0;
-  }
-
-  /* Remove any height restrictions on messages */
-  :global(.chat-message) {
-    max-height: none !important;
-    overflow: visible !important;
+    margin-top: auto;
   }
 
   .model-name-container {
@@ -1093,14 +1326,6 @@
     flex-wrap: wrap;
   }
 
-  .model-title {
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  /* Update info-icon style to work in both contexts */
   .info-icon {
     cursor: help;
     color: #888;
@@ -1179,19 +1404,6 @@
     background-color: #747bff;
   }
 
-  .scroll-to-bottom {
-    position: fixed;
-    bottom: 80px; /* Positioned above the fixed input container */
-    right: 20px;
-    padding: 0.5rem 1rem;
-    background-color: #646cff;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    z-index: 110;
-  }
-
   .web-search-toggle {
     display: flex;
     align-items: center;
@@ -1223,5 +1435,96 @@
 
   .web-search-toggle.enabled svg {
     transform: scale(1.1);
+  }
+
+  .chat-tokens {
+    font-size: 0.8rem;
+    color: #888;
+    margin-top: 0.25rem;
+  }
+
+  .chat-tokens span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: rgba(100, 108, 255, 0.1);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    cursor: help;
+  }
+
+  .chat-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .delete-button {
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: #888;
+    transition: color 0.2s;
+  }
+
+  .delete-button:hover {
+    color: #ff4444;
+  }
+
+  .delete-button svg {
+    fill: currentColor;
+  }
+
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    padding: 2rem;
+  }
+
+  .empty-state-content {
+    text-align: center;
+    max-width: 600px;
+    color: #e1e1e1;
+  }
+
+  .empty-state-content h2 {
+    margin: 0 0 1rem 0;
+    font-size: 1.5rem;
+    color: #646cff;
+  }
+
+  .empty-state-content p {
+    margin: 0 0 2rem 0;
+    color: #888;
+  }
+
+  .empty-state-tips {
+    text-align: left;
+    background: rgba(100, 108, 255, 0.1);
+    padding: 1.5rem;
+    border-radius: 8px;
+  }
+
+  .empty-state-tips h3 {
+    margin: 0 0 1rem 0;
+    font-size: 1rem;
+    color: #646cff;
+  }
+
+  .empty-state-tips ul {
+    margin: 0;
+    padding-left: 1.5rem;
+    color: #888;
+  }
+
+  .empty-state-tips li {
+    margin-bottom: 0.5rem;
+  }
+
+  .empty-state-tips li:last-child {
+    margin-bottom: 0;
   }
 </style> 

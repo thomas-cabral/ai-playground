@@ -79,6 +79,18 @@ func (cc *ChatController) HandleGetChats(c *gin.Context) {
 	c.JSON(200, chats)
 }
 
+func (cc *ChatController) HandleGetChat(c *gin.Context) {
+	chatID := c.Param("id")
+	var chat models.Chat
+
+	if err := cc.openRouterService.DB.Preload("Messages").First(&chat, chatID).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Chat not found"})
+		return
+	}
+
+	c.JSON(200, chat)
+}
+
 func (cc *ChatController) HandleNewChat(c *gin.Context) {
 	var req struct {
 		Model string `json:"model"`
@@ -138,4 +150,16 @@ func (cc *ChatController) HandleToggleMessageStar(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"starred": message.Starred})
+}
+
+func (cc *ChatController) HandleDeleteChat(c *gin.Context) {
+	chatID := c.Param("id")
+
+	// Soft delete the chat
+	if err := cc.openRouterService.DB.Delete(&models.Chat{}, chatID).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(200, gin.H{"message": "Chat deleted successfully"})
 }

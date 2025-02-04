@@ -25,14 +25,14 @@
   import 'prismjs/components/prism-sql';
   import 'prismjs/components/prism-graphql';
   import 'prismjs/components/prism-csharp';
-  import type { Message, NewMessage } from './types';  // You might need to create a types.ts file
+  import type { Message, NewMessage } from './types';
   
   export let message: Message | NewMessage;
-  export let availableModels: Record<string, any>;  // Add this prop
+  export let availableModels: Record<string, any>; 
   export let onToggleStar: (messageId: number) => void;
 
   let contentElement: HTMLElement;
-  let formattedContent: string;
+  let formattedContent = ''; 
 
   // Configure marked for safe HTML and syntax highlighting
   marked.setOptions({
@@ -72,7 +72,11 @@
     }
   } as MarkedOptions);
 
-  $: formattedContent = marked(message.Content);
+  $: {
+    Promise.resolve(marked(message.content)).then(content => {
+      formattedContent = content;
+    });
+  }
 
   function highlightCode() {
     if (contentElement) {
@@ -95,28 +99,47 @@
   function getModelDisplayName(modelName: string): string {
     return availableModels[modelName]?.name || modelName;
   }
+
+  // Helper function to calculate cost from token usage and pricing
+  function calculateCost(
+    tokenUsage: { promptTokens: number; completionTokens: number; totalTokens: number },
+    pricing: { prompt: string; completion: string }
+  ): { promptCost: number; completionCost: number; totalCost: number } {
+    const promptCost = tokenUsage.promptTokens * parseFloat(pricing.prompt);
+    const completionCost = tokenUsage.completionTokens * parseFloat(pricing.completion);
+    return {
+      promptCost,
+      completionCost,
+      totalCost: promptCost + completionCost
+    };
+  }
+  
+  // Helper function to format cost as currency
+  function formatCost(cost: number): string {
+    return `$${cost.toFixed(6)}`;
+  }
 </script>
 
-<div class="message {message.Role.toLowerCase()} {message.Starred ? 'starred' : ''}">
+<div class="message {message.role.toLowerCase()} {message.starred ? 'starred' : ''}">
   <div class="avatar">
-    {message.Role === 'user' ? '👤' : '🤖'}
+    {message.role === 'user' ? '👤' : '🤖'}
   </div>
   <div class="content-wrapper">
     <div class="message-header">
-      <span class="role">{message.Role}</span>
-      {#if message.ModelName}
+      <span class="role">{message.role}</span>
+      {#if message.modelName}
         <span class="model-tag">
-          {getModelDisplayName(message.ModelName)}
+          {getModelDisplayName(message.modelName)}
         </span>
       {/if}
-      {#if 'ID' in message}
+      {#if message.id}
         <button 
           class="star-button" 
-          on:click={() => onToggleStar(message.ID)}
-          title={message.Starred ? "Unstar message" : "Star message"}
-          aria-label={message.Starred ? "Unstar message" : "Star message"}
+          on:click={() => onToggleStar(message.id ?? 0)}
+          title={message.starred ? "Unstar message" : "Star message"}
+          aria-label={message.starred ? "Unstar message" : "Star message"}
         >
-          <svg class="star-icon" class:filled={message.Starred} viewBox="0 0 24 24">
+          <svg class="star-icon" class:filled={message.starred} viewBox="0 0 24 24">
             <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
           </svg>
         </button>
@@ -124,6 +147,14 @@
     </div>
     <div class="content" bind:this={contentElement}>
       {@html formattedContent}
+      {#if message.role !== 'user' && message.tokenUsage && availableModels[message.modelName ?? '']}
+        {@const cost = calculateCost(message.tokenUsage, availableModels[message.modelName ?? ''].pricing)}
+        <div class="message-cost-details">
+          <span title="Input cost">I: {formatCost(cost.promptCost)}</span>
+          <span title="Output cost">O: {formatCost(cost.completionCost)}</span>
+          <span title="Total cost">Total: {formatCost(cost.totalCost)}</span>
+        </div>
+      {/if}
     </div>
   </div>
 </div>
@@ -413,5 +444,31 @@
 
   .message.starred {
     background-color: rgba(100, 108, 255, 0.05);
+  }
+
+  .token-usage {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: #888;
+  }
+
+  .token-usage span {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: rgba(100, 108, 255, 0.1);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    cursor: help;
+  }
+
+  .message-cost-details {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: #888;
   }
 </style> 

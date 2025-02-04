@@ -66,9 +66,16 @@ type StreamChoice struct {
 	FinishReason string `json:"finish_reason"`
 }
 
+type UsageData struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 type StreamResponse struct {
 	ID      string         `json:"id"`
 	Choices []StreamChoice `json:"choices"`
+	Usage   *UsageData     `json:"usage,omitempty"`
 }
 
 func NewOpenRouterService(db *gorm.DB) *OpenRouterService {
@@ -226,6 +233,9 @@ func (s *OpenRouterService) Chat(req ChatRequest, chatID uint, w http.ResponseWr
 
 	// Parse the accumulated response to extract the assistant's message
 	var fullResponse string
+	// Declare variables to store token usage if present in the stream
+	var promptTokens, completionTokens, totalTokens int
+
 	responseLines := bytes.Split(responseBuffer.Bytes(), []byte("\n"))
 	fmt.Printf("Debug: Total response lines: %d\n", len(responseLines))
 
@@ -247,6 +257,13 @@ func (s *OpenRouterService) Chat(req ChatRequest, chatID uint, w http.ResponseWr
 				continue
 			}
 
+			// Check for the usage field in the stream response and capture it
+			if streamResponse.Usage != nil {
+				promptTokens = streamResponse.Usage.PromptTokens
+				completionTokens = streamResponse.Usage.CompletionTokens
+				totalTokens = streamResponse.Usage.TotalTokens
+			}
+
 			if len(streamResponse.Choices) > 0 {
 				content := streamResponse.Choices[0].Delta.Content
 				fmt.Printf("Debug: Found content: %s\n", content)
@@ -260,6 +277,18 @@ func (s *OpenRouterService) Chat(req ChatRequest, chatID uint, w http.ResponseWr
 	// Update the assistant's message with the complete response
 	if err := s.DB.Model(&assistantMessage).Update("content", fullResponse).Error; err != nil {
 		return fmt.Errorf("error updating assistant message: %v", err)
+	}
+
+	// If token usage was extracted, update the assistant's message with the token usage data
+	if promptTokens != 0 || completionTokens != 0 || totalTokens != 0 {
+		updates := map[string]interface{}{
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      totalTokens,
+		}
+		if err := s.DB.Model(&assistantMessage).Updates(updates).Error; err != nil {
+			return fmt.Errorf("error updating assistant message with usage: %v", err)
+		}
 	}
 
 	return nil
