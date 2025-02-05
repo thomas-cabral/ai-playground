@@ -27,4 +27,10 @@
     background-color: #1a1a1a;
     color: #e1e1e1;
   }
+
+  h1 {
+    text-align: center;
+    color: #e1e1e1;
+    margin-bottom: 2rem;
+  }
 </style>

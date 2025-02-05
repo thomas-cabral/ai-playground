@@ -30,24 +30,9 @@
   export let message: Message | NewMessage;
   export let availableModels: Record<string, any>; 
   export let onToggleStar: (messageId: number) => void;
-  export let onEdit: (message: Message) => void;
-  export let showForks: boolean = false;
-  export let onShowForks: () => void;
-  export let forks: { messageId: number; forkId: number; messageContent: string; createdAt: string }[] = [];
 
   let contentElement: HTMLElement;
   let formattedContent = ''; 
-
-  // Add state for fork visibility
-  let isForksVisible = false;
-
-  // Function to toggle fork visibility
-  function toggleForks() {
-    isForksVisible = !isForksVisible;
-    if (isForksVisible) {
-      onShowForks();
-    }
-  }
 
   // Configure marked for safe HTML and syntax highlighting
   marked.setOptions({
@@ -133,10 +118,6 @@
   function formatCost(cost: number): string {
     return `$${cost.toFixed(6)}`;
   }
-
-  function formatDate(date: string) {
-    return new Date(date).toLocaleString();
-  }
 </script>
 
 <div class="message {message.role.toLowerCase()} {message.starred ? 'starred' : ''}">
@@ -163,38 +144,6 @@
           </svg>
         </button>
       {/if}
-      {#if message.role === 'user'}
-        <div class="message-actions">
-          <div class="action-buttons">
-            <button 
-              class="edit-button" 
-              on:click={() => onEdit(message)}
-              title="Edit message"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-              </svg>
-            </button>
-            {#if forks.length > 0}
-              <button 
-                class="fork-button" 
-                class:active={isForksVisible}
-                on:click={toggleForks}
-                title={isForksVisible ? "Hide forks" : "Show forks"}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 3v12"></path>
-                  <circle cx="18" cy="6" r="3"></circle>
-                  <circle cx="6" cy="18" r="3"></circle>
-                  <path d="M18 9a9 9 0 0 1-9 9"></path>
-                </svg>
-                <span class="fork-count">{forks.length}</span>
-              </button>
-            {/if}
-          </div>
-        </div>
-      {/if}
     </div>
     <div class="content" bind:this={contentElement}>
       {@html formattedContent}
@@ -208,27 +157,6 @@
       {/if}
     </div>
   </div>
-
-  {#if isForksVisible && forks.length > 0}
-    <div class="forks-container">
-      <div class="forks-header">
-        <span class="forks-title">Forks ({forks.length})</span>
-      </div>
-      <div class="forks-list">
-        {#each forks as fork}
-          <div class="fork-item" on:click={() => window.location.href = `?chat=${fork.forkId}`}>
-            <div class="fork-content">
-              <div class="fork-preview">{fork.messageContent.slice(0, 100)}...</div>
-              <div class="fork-meta">
-                <span class="fork-date">{formatDate(fork.createdAt)}</span>
-              </div>
-            </div>
-            <div class="fork-arrow">→</div>
-          </div>
-        {/each}
-      </div>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -471,7 +399,6 @@
     align-items: center;
     gap: 0.5rem;
     margin-bottom: 0.5rem;
-    flex-wrap: wrap;
   }
 
   .role {
@@ -543,104 +470,5 @@
     margin-top: 0.5rem;
     font-size: 0.8rem;
     color: #888;
-  }
-
-  .message-actions {
-    margin-left: auto; /* Push actions to the right */
-  }
-
-  .action-buttons {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
-  .edit-button,
-  .fork-button {
-    background: none;
-    border: none;
-    padding: 4px;
-    cursor: pointer;
-    color: #888;
-    transition: color 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-
-  .edit-button:hover,
-  .fork-button:hover {
-    color: #646cff;
-  }
-
-  .fork-button.active {
-    color: #646cff;
-    background: rgba(100, 108, 255, 0.1);
-    border-radius: 4px;
-  }
-
-  .fork-count {
-    font-size: 0.8rem;
-    background: rgba(100, 108, 255, 0.2);
-    padding: 0.1rem 0.3rem;
-    border-radius: 0.8rem;
-    min-width: 1.2rem;
-    text-align: center;
-  }
-
-  .forks-container {
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid #333;
-  }
-  
-  .forks-header {
-    margin-bottom: 0.5rem;
-  }
-  
-  .forks-title {
-    font-size: 0.9rem;
-    color: #888;
-  }
-  
-  .forks-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  
-  .fork-item {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.75rem;
-    background: rgba(100, 108, 255, 0.1);
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-  
-  .fork-item:hover {
-    background: rgba(100, 108, 255, 0.2);
-  }
-  
-  .fork-content {
-    flex: 1;
-  }
-  
-  .fork-preview {
-    font-size: 0.9rem;
-    color: #e1e1e1;
-    margin-bottom: 0.25rem;
-  }
-  
-  .fork-meta {
-    font-size: 0.8rem;
-    color: #888;
-  }
-  
-  .fork-arrow {
-    color: #646cff;
-    font-size: 1.2rem;
   }
 </style> 
