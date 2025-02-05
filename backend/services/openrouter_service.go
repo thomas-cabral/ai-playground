@@ -107,12 +107,15 @@ func (s *OpenRouterService) Chat(req ChatRequest, chatID uint, w http.ResponseWr
 		chatID = chat.ID
 	}
 
-	// Save new messages
+	// Save new messages and track the last user message ID
+	var lastUserMessageID uint
 	for _, msg := range req.Messages {
 		// Skip messages that already exist in the database
 		if msg.ID != 0 {
 			continue
 		}
+
+		fmt.Printf("Debug: Saving message with ID: %d\n", msg.ID)
 
 		// Create new message
 		message := models.Message{
@@ -124,6 +127,55 @@ func (s *OpenRouterService) Chat(req ChatRequest, chatID uint, w http.ResponseWr
 		if err := s.DB.Create(&message).Error; err != nil {
 			return fmt.Errorf("error saving message: %v", err)
 		}
+
+		// If this is a user message, store its ID
+		if msg.Role == "user" {
+			lastUserMessageID = message.ID
+		}
+	}
+
+	// Send the user message ID to the client first
+	if lastUserMessageID != 0 {
+		userMessageIDResponse := struct {
+			MessageID uint   `json:"message_id"`
+			Role      string `json:"role"`
+		}{
+			MessageID: lastUserMessageID,
+			Role:      "user",
+		}
+		userMessageIDJSON, _ := json.Marshal(userMessageIDResponse)
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", userMessageIDJSON); err != nil {
+			return fmt.Errorf("error sending user message ID: %v", err)
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+
+	// Create and save the assistant message
+	assistantMessage := models.Message{
+		ChatID:  chat.ID,
+		Role:    "assistant",
+		Content: "", // This will be populated as we stream
+	}
+	if err := s.DB.Create(&assistantMessage).Error; err != nil {
+		return fmt.Errorf("error saving assistant message: %v", err)
+	}
+
+	// Send the assistant message ID to the client
+	messageIDResponse := struct {
+		MessageID uint   `json:"message_id"`
+		Role      string `json:"role"`
+	}{
+		MessageID: assistantMessage.ID,
+		Role:      "assistant",
+	}
+	messageIDJSON, _ := json.Marshal(messageIDResponse)
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", messageIDJSON); err != nil {
+		return fmt.Errorf("error sending message ID: %v", err)
+	}
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
 	}
 
 	// Remove the old chat ID check since we're handling it with the request parameter now
@@ -192,17 +244,6 @@ func (s *OpenRouterService) Chat(req ChatRequest, chatID uint, w http.ResponseWr
 
 	// Create a buffered reader for the response body
 	reader := bufio.NewReader(resp.Body)
-
-	// After successful API response, save the assistant's response
-	// This should be added before the streaming loop
-	assistantMessage := models.Message{
-		ChatID:  chat.ID,
-		Role:    "assistant",
-		Content: "", // This will be populated as we stream
-	}
-	if err := s.DB.Create(&assistantMessage).Error; err != nil {
-		return fmt.Errorf("error saving assistant message: %v", err)
-	}
 
 	// Create a buffer to store the complete response
 	var responseBuffer bytes.Buffer

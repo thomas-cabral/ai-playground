@@ -1,39 +1,38 @@
 <script lang="ts">
-  import { onMount, afterUpdate, tick } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import ChatMessage from './ChatMessage.svelte';
   import type { Message, NewMessage, Chat, OpenRouterModel, TokenUsage } from './types';
 
-  let availableModels: Record<string, OpenRouterModel> = {};
-  let messages: (Message | NewMessage)[] = [];
-  let userInput = '';
-  let isLoading = false;
-  let selectedModel = '';  // We'll set this after fetching models
-  let searchTerm = '';
-  let filteredModels: Record<string, OpenRouterModel> = {};
-  let isDropdownOpen = false;
+  let availableModels: Record<string, OpenRouterModel> = $state({});
+  let messages: (Message | NewMessage)[] = $state([]);
+  let userInput = $state('');
+  let isLoading = $state(false);
+  let selectedModel = $state('');  // We'll set this after fetching models
+  let searchTerm = $state('');
   let searchInput: HTMLInputElement;
-  let previousChats: Chat[] = [];
-  let showChatHistory = false;
-  let currentChatId: number | null = null;
-  let modelSelectorFocused = false;
-  let webSearchEnabled = false;
+  let isDropdownOpen = $state(false);
+  let previousChats: Chat[] = $state([]);
+  let showChatHistory = $state(false);
+  let currentChatId: number | null = $state(null);
+  let modelSelectorFocused = $state(false);
+  let webSearchEnabled = $state(false);
 
   let messagesContainer: HTMLDivElement;
 
-  let autoScroll = true;
+  let autoScroll = $state(true);
 
   // Update pagination variables
   let currentPage = 1;
-  let hasMore = true;
-  let isFetchingMore = false;
-  let isInitialLoad = true;
+  let hasMore = $state(true);
+  let isFetchingMore = $state(false);
+  let isInitialLoad = $state(true);
 
-  let editingMessageId: number | null = null;
-  let editedContent = '';
+  let editingMessageId: number | null = $state(null);
+  let editedContent = $state('');
 
   // Add these variables
-  let forkHistory: { id: number; parentId: number | null; messageContent: string }[] = [];
-  let currentForkId: number | null = null;
+  let forkHistory: { id: number; parentId: number | null; messageContent: string }[] = $state([]);
+  let currentForkId: number | null = $state(null);
 
   // Add this type definition at the top with other types
   interface Fork {
@@ -53,7 +52,8 @@
     createdAt: string;
   } | null = null;
 
-  // Single onMount function to handle all initialization
+  let observer: IntersectionObserver;
+
   onMount(async () => {
     const savedModel = localStorage.getItem('selectedModel');
     const urlParams = new URLSearchParams(window.location.search);
@@ -95,7 +95,7 @@
       await fetchChatHistory(1, false);
 
       // 3. Set up intersection observer after initial fetch
-      const observer = new IntersectionObserver(
+      observer = new IntersectionObserver(
         async (entries) => {
           const trigger = entries[0];
           if (trigger.isIntersecting && hasMore && !isFetchingMore) {
@@ -117,19 +117,18 @@
       if (chatId) {
         await loadChatById(chatId);
       }
-
-      return () => {
-        if (loadMoreTrigger) {
-          observer.unobserve(loadMoreTrigger);
-        }
-      };
-
     } catch (error) {
       console.error('Error in initialization:', error);
     }
   });
 
-  afterUpdate(() => {
+  onDestroy(() => {
+    if (observer && loadMoreTrigger) {
+      observer.unobserve(loadMoreTrigger);
+    }
+  });
+
+  $effect(() => {
     if (messagesContainer && autoScroll) {
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
@@ -157,35 +156,34 @@
     window.history.replaceState({}, '', url);
   }
 
-  // Update the loadForksForChat function to add logging
+  // Update the loadForksForChat function to remove debug logging
   async function loadForksForChat(chatId: number) {
     try {
-      console.log('Loading forks for chat:', chatId);
       const response = await fetch(`http://localhost:8088/api/chat/${chatId}/forks`);
       if (response.ok) {
         const forks = await response.json();
-        console.log('Received forks:', forks);
         messageForksMap.clear();
         
-        // For each fork, get the message content only if we have a valid messageId
-        for (const fork of forks) {
-          console.log('Processing fork:', fork);
-          if (!fork.messageId) {
-            console.log('Skipping fork due to missing messageId:', fork);
-            continue;
-          }
-          
-          const existingForks = messageForksMap.get(fork.messageId) || [];
-          existingForks.push({
-            messageId: fork.messageId,
-            forkId: fork.forkId,
-            messageContent: fork.messageContent || '', 
-            createdAt: fork.createdAt || new Date().toISOString()
+        if (Array.isArray(forks)) {
+          forks.forEach((fork: {
+            messageId: number;
+            forkId: number;
+            messageContent: string;
+            createdAt: string;
+          }) => {
+            if (!fork.messageId) return;
+            
+            const existingForks = messageForksMap.get(fork.messageId) || [];
+            existingForks.push({
+              messageId: fork.messageId,
+              forkId: fork.forkId,
+              messageContent: fork.messageContent || '',
+              createdAt: fork.createdAt
+            });
+            messageForksMap.set(fork.messageId, existingForks);
           });
-          messageForksMap.set(fork.messageId, existingForks);
         }
         
-        console.log('Updated messageForksMap:', messageForksMap);
         // Force Svelte to update by creating a new Map
         messageForksMap = new Map(messageForksMap);
       }
@@ -195,17 +193,27 @@
     }
   }
 
-  // Update loadChatById to load forks
+  // Add this helper function near the top with other functions
+  function scrollToMessage(messageId: number) {
+    setTimeout(() => {
+      const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+      if (messageElement) {
+        messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100); // Small delay to ensure DOM is updated
+  }
+
+  // Update the loadChatById function to handle scrolling to forked message
   async function loadChatById(chatId: string) {
     try {
       const response = await fetch(`http://localhost:8088/api/chat/${chatId}`);
       if (response.ok) {
         const chat = await response.json();
         currentChatId = chat.id;
-        messages = chat.messages.map(msg => ({
+        messages = chat.messages.map((msg: any) => ({
+          id: msg.id,
           role: msg.role,
           content: msg.content,
-          id: msg.id,
           modelName: msg.modelName || chat.modelName,
           starred: msg.starred,
           tokenUsage: msg.tokenUsage,
@@ -222,6 +230,8 @@
               createdAt: parentData.createdAt
             };
           }
+          // Scroll to the forked message after loading
+          scrollToMessage(chat.forkMessageId);
         } else {
           parentChat = null;
         }
@@ -244,97 +254,141 @@
   }
 
   async function* streamResponse(reader: ReadableStreamDefaultReader<Uint8Array>) {
-    let lastChunk = '';
+    let partialChunk = '';
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        // Process any remaining data in lastChunk
-        if (lastChunk) {
-          try {
-            const data = JSON.parse(lastChunk);
-            if (data.usage) {
-              // Return token usage data
-              yield {
-                type: 'usage',
-                usage: {
-                  promptTokens: data.usage.prompt_tokens,
-                  completionTokens: data.usage.completion_tokens,
-                  totalTokens: data.usage.total_tokens
+        const { done, value } = await reader.read();
+        if (done) {
+            // Try to parse any remaining data in partialChunk
+            if (partialChunk) {
+                try {
+                    const lines = partialChunk.split('\n').filter(line => line.trim() !== '');
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const content = line.slice(6).trim();
+                            // Skip the [DONE] message
+                            if (content === '[DONE]') continue;
+                            
+                            try {
+                                const data = JSON.parse(content);
+                                if (data.usage) {
+                                    yield {
+                                        type: 'usage',
+                                        usage: {
+                                            promptTokens: data.usage.prompt_tokens,
+                                            completionTokens: data.usage.completion_tokens,
+                                            totalTokens: data.usage.total_tokens
+                                        }
+                                    };
+                                }
+                                if (data.message_id) {
+                                    yield {
+                                        type: 'message_id',
+                                        id: data.message_id,
+                                        role: data.role
+                                    };
+                                }
+                            } catch (e) {
+                                // Only log non-[DONE] parse errors
+                                if (content !== '[DONE]') {
+                                    console.debug('Ignoring parse error for line:', content);
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.debug('Error processing final chunks:', e);
                 }
-              };
             }
-          } catch (e) {
-            console.error('Error parsing final chunk:', e);
-          }
+            break;
         }
-        break;
-      }
 
-      const text = new TextDecoder().decode(value);
-      const lines = text.split('\n').filter(line => line.trim() !== '');
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.choices?.[0]?.delta?.content) {
-              yield {
-                type: 'content',
-                content: data.choices[0].delta.content
-              };
-            } else if (data.usage) {
-              yield {
-                type: 'usage',
-                usage: {
-                  promptTokens: data.usage.prompt_tokens,
-                  completionTokens: data.usage.completion_tokens,
-                  totalTokens: data.usage.total_tokens
+        const text = new TextDecoder().decode(value);
+        const chunks = (partialChunk + text).split('\n');
+        
+        // Save the last chunk as it might be incomplete
+        partialChunk = chunks[chunks.length - 1];
+        
+        // Process all complete chunks
+        const completeChunks = chunks.slice(0, -1);
+        
+        for (const chunk of completeChunks) {
+            if (chunk.trim() === '') continue;
+            
+            if (chunk.startsWith('data: ')) {
+                const content = chunk.slice(6).trim();
+                // Skip the [DONE] message
+                if (content === '[DONE]') continue;
+                
+                try {
+                    const data = JSON.parse(content);
+                    if (data.choices?.[0]?.delta?.content) {
+                        yield {
+                            type: 'content',
+                            content: data.choices[0].delta.content
+                        };
+                    } else if (data.usage) {
+                        yield {
+                            type: 'usage',
+                            usage: {
+                                promptTokens: data.usage.prompt_tokens,
+                                completionTokens: data.usage.completion_tokens,
+                                totalTokens: data.usage.total_tokens
+                            }
+                        };
+                    } else if (data.message_id) {
+                        yield {
+                            type: 'message_id',
+                            id: data.message_id,
+                            role: data.role
+                        };
+                    }
+                } catch (e) {
+                    // Only log non-[DONE] parse errors
+                    if (content !== '[DONE]') {
+                        console.debug('Error parsing chunk:', content);
+                    }
                 }
-              };
             }
-          } catch (e) {
-            console.error('Error parsing JSON:', e);
-          }
         }
-      }
-      lastChunk = lines[lines.length - 1];
     }
   }
 
   async function updateChatHistory() {
     try {
-      const historyResponse = await fetch('http://localhost:8088/api/chat');
-      if (historyResponse.ok) {
-        const data = await historyResponse.json();
-        previousChats = data.map((chat: any) => ({
-          id: chat.id,
-          messages: chat.messages.map((msg: Message) => ({
-            id: msg.id,
-            chatId: msg.chatId,
-            role: msg.role,
-            content: msg.content,
-            createdAt: msg.createdAt,
-            updatedAt: msg.updatedAt,
-            deletedAt: msg.deletedAt,
-            modelName: msg.modelName,
-            starred: msg.starred,
-            tokenUsage: ('promptTokens' in msg && 'completionTokens' in msg && 'totalTokens' in msg)
-              ? {
-                  promptTokens: msg.promptTokens,
-                  completionTokens: msg.completionTokens,
-                  totalTokens: msg.totalTokens
-                }
-              : undefined
-          })),
-          createdAt: chat.createdAt,
-          updatedAt: chat.updatedAt,
-          deletedAt: chat.deletedAt,
-          modelName: chat.modelName,
-          starred: chat.starred
-        }));
-      }
+        const historyResponse = await fetch('http://localhost:8088/api/chat');
+        if (historyResponse.ok) {
+            const data = await historyResponse.json();
+            // Handle the paginated response format
+            const chats = data.chats || [];
+            previousChats = chats.map((chat: any) => ({
+                id: chat.id,
+                messages: chat.messages.map((msg: Message) => ({
+                    id: msg.id,
+                    chatId: msg.chatId,
+                    role: msg.role,
+                    content: msg.content,
+                    createdAt: msg.createdAt,
+                    updatedAt: msg.updatedAt,
+                    deletedAt: msg.deletedAt,
+                    modelName: msg.modelName,
+                    starred: msg.starred,
+                    tokenUsage: ('promptTokens' in msg && 'completionTokens' in msg && 'totalTokens' in msg)
+                        ? {
+                            promptTokens: msg.promptTokens,
+                            completionTokens: msg.completionTokens,
+                            totalTokens: msg.totalTokens
+                        }
+                        : undefined
+                })),
+                createdAt: chat.createdAt,
+                updatedAt: chat.updatedAt,
+                deletedAt: chat.deletedAt,
+                modelName: chat.modelName,
+                starred: chat.starred
+            }));
+        }
     } catch (error) {
-      console.error('Error updating chat history:', error);
+        console.error('Error updating chat history:', error);
     }
   }
 
@@ -392,17 +446,19 @@
                 modelName: selectedModel 
             } as NewMessage];
 
-            // Create the request body with the chat_id
+            // Create the request body with message IDs
             const requestBody = {
                 model: webSearchEnabled ? `${selectedModel}:online` : selectedModel,
                 messages: messages.slice(0, -1).map(msg => ({
-                    id: 'ID' in msg ? msg.id : undefined,
                     role: msg.role,
-                    content: msg.content
+                    content: msg.content,
+                    id: ('id' in msg) ? msg.id : undefined  // Include ID if it exists
                 })),
                 stream: true,
-                chat_id: currentChatId  // Always include chat_id now
+                chat_id: currentChatId
             };
+
+            console.log('Sending request with body:', JSON.stringify(requestBody, null, 2));
 
             const response = await fetch('http://localhost:8088/api/chat', {
                 method: 'POST',
@@ -426,6 +482,15 @@
                 } else if (chunk.type === 'usage') {
                     messages[messages.length - 1].tokenUsage = chunk.usage;
                     messages = messages;
+                } else if (chunk.type === 'message_id') {
+                    // Find the correct message to update based on role
+                    const messageIndex = messages.findIndex(msg => 
+                        msg.role === chunk.role && !('id' in msg)
+                    );
+                    if (messageIndex !== -1) {
+                        messages[messageIndex].id = chunk.id;
+                        messages = messages;
+                    }
                 }
             }
 
@@ -522,18 +587,17 @@
     );
   }
 
-  $: {
-    // Filter models whenever searchTerm or availableModels changes
-    filteredModels = Object.entries(availableModels).reduce((acc, [id, model]) => {
-      if (searchModelMatch(id, model.name, searchTerm)) {
-        acc[id] = model;
-      }
-      return acc;
-    }, {} as Record<string, OpenRouterModel>);
-  }
+  let filteredModels = $derived(
+  Object.entries(availableModels).reduce((acc, [id, model]) => {
+    if (searchModelMatch(id, model.name, searchTerm)) {
+      acc[id] = model;
+    }
+    return acc;
+  }, {} as Record<string, OpenRouterModel>)
+);
 
   // Show the selected model name in the input
-  $: selectedModelName = availableModels[selectedModel]?.name || selectedModel;
+  let selectedModelName = $derived(availableModels[selectedModel]?.name || selectedModel);
 
   // Update loadChat to be simpler and not trigger any message sends
   function loadChat(chat: Chat) {
@@ -567,6 +631,7 @@
   function startNewChat() {
     messages = [];
     currentChatId = null;
+    parentChat = null;
     updateUrl(null);
     showChatHistory = false;
   }
@@ -819,12 +884,13 @@
     }
   }
 
-  // Update handleSaveEdit to properly handle forking
+  // Update handleSaveEdit to load parent info after creating fork
   async function handleSaveEdit() {
     if (!editingMessageId || !editedContent.trim() || isLoading) return;
 
     try {
       isLoading = true;
+      const savedContent = editedContent;
       
       // Create the fork
       const response = await fetch('http://localhost:8088/api/chat/fork', {
@@ -835,7 +901,7 @@
         body: JSON.stringify({
           chatId: currentChatId,
           messageId: editingMessageId,
-          newContent: editedContent,
+          newContent: savedContent,
         }),
       });
 
@@ -848,19 +914,150 @@
       editingMessageId = null;
       editedContent = '';
 
-      // Load forks for the current chat to update the UI
-      await loadForksForChat(currentChatId ?? 0);
-
-      // Navigate to the new forked chat
+      // Load the new forked chat
+      currentChatId = newChatId;
       updateUrl(newChatId.toString());
-      await loadChatById(newChatId.toString());
+      
+      // Get all messages up to the fork point and parent info
+      const chatResponse = await fetch(`http://localhost:8088/api/chat/${newChatId}`);
+      if (!chatResponse.ok) throw new Error('Failed to load forked chat');
+      
+      const chatData = await chatResponse.json();
+      messages = chatData.messages.map((msg: any) => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        modelName: msg.modelName || chatData.modelName,
+        starred: msg.starred,
+        tokenUsage: msg.tokenUsage,
+      }));
 
-      // Send the edited message in the new chat
-      userInput = editedContent;
-      await handleSubmit();
+      // Load parent info if this is a fork
+      if (chatData.parentId && chatData.forkMessageId) {
+        const parentResponse = await fetch(`http://localhost:8088/api/chat/${chatData.parentId}/fork-message/${chatData.forkMessageId}`);
+        if (parentResponse.ok) {
+          const parentData = await parentResponse.json();
+          parentChat = {
+            id: parentData.chatId,
+            messageContent: parentData.messageContent,
+            createdAt: parentData.createdAt
+          };
+        }
+      } else {
+        parentChat = null;
+      }
+
+      // Add the edited user message
+      const userMessage = {
+        role: 'user',
+        content: savedContent,
+        modelName: selectedModel
+      };
+      messages = [...messages, userMessage];
+
+      // Get assistant response for the edited message
+      const requestBody = {
+        model: webSearchEnabled ? `${selectedModel}:online` : selectedModel,
+        messages: [...messages].map(msg => ({
+          role: msg.role,
+          content: msg.content,
+          id: ('id' in msg) ? msg.id : undefined
+        })),
+        stream: true,
+        chat_id: newChatId
+      };
+
+      const streamResponse = await fetch('http://localhost:8088/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!streamResponse.ok) throw new Error('Failed to get assistant response');
+
+      // Process the stream response
+      let hasContent = false;
+      const reader = streamResponse.body?.getReader();
+      if (!reader) throw new Error('No reader available');
+
+      // Add empty assistant message that will be populated
+      const assistantMessage = {
+        role: 'assistant',
+        content: '',
+        modelName: selectedModel
+      } as NewMessage;
+      messages = [...messages, assistantMessage];
+
+      // Process the stream
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const text = new TextDecoder().decode(value);
+          const lines = text.split('\n').filter(line => line.trim() !== '');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+
+                if (data.choices?.[0]?.delta?.content) {
+                  hasContent = true;
+                  const lastMessage = messages[messages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant') {
+                    lastMessage.content += data.choices[0].delta.content;
+                    messages = [...messages]; // Force Svelte reactivity
+                  }
+                } else if (data.usage) {
+                  const lastMessage = messages[messages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant') {
+                    lastMessage.tokenUsage = {
+                      promptTokens: data.usage.prompt_tokens,
+                      completionTokens: data.usage.completion_tokens,
+                      totalTokens: data.usage.total_tokens
+                    };
+                    messages = [...messages]; // Force Svelte reactivity
+                  }
+                } else if (data.message_id) {
+                  const messageIndex = messages.findIndex(msg => 
+                    msg.role === data.role && !('id' in msg)
+                  );
+                  if (messageIndex !== -1) {
+                    messages[messageIndex] = {
+                      ...messages[messageIndex],
+                      id: data.message_id
+                    };
+                    messages = [...messages]; // Force Svelte reactivity
+                  }
+                }
+              } catch (error) {
+                console.error('Error parsing chunk:', error, line); // Debug log
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error reading stream:', error);
+      } finally {
+        reader.releaseLock();
+      }
+
+      // If we didn't get any content, remove the empty assistant message
+      if (!hasContent) {
+        console.log('No content received, removing empty assistant message'); // Debug log
+        messages = messages.slice(0, -1);
+      } else {
+        console.log('Final messages:', messages); // Debug log
+      }
+
+      // Load forks for the new chat
+      await loadForksForChat(newChatId);
 
     } catch (error) {
-      console.error('Error creating fork:', error);
+      console.error('Error handling fork:', error);
     } finally {
       isLoading = false;
     }
@@ -890,8 +1087,8 @@
         <div 
           class="chat-history-item" 
           class:starred={chat.starred}
-          on:click={() => loadChat(chat)}
-          on:keydown={(e) => e.key === 'Enter' && loadChat(chat)}
+          onclick={() => loadChat(chat)}
+          onkeydown={(e) => e.key === 'Enter' && loadChat(chat)}
           role="button"
           tabindex="0"
         >
@@ -902,7 +1099,7 @@
                 <button 
                   class="star-button" 
                   aria-label={chat.starred ? "Unstar chat" : "Star chat"}
-                  on:click|stopPropagation={() => toggleChatStar(chat.id)}
+                  onclick={(e) => { e.stopPropagation(); toggleChatStar(chat.id); }}
                   title={chat.starred ? "Unstar chat" : "Star chat"}
                 >
                   <svg class="star-icon" class:filled={chat.starred} viewBox="0 0 24 24">
@@ -912,7 +1109,7 @@
                 <button 
                   class="delete-button" 
                   aria-label="Delete chat"
-                  on:click|stopPropagation={() => deleteChat(chat.id)}
+                  onclick={(e) => { e.stopPropagation(); deleteChat(chat.id); }}
                   title="Delete chat"
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16">
@@ -969,13 +1166,13 @@
       <div class="header-controls">
         <button 
           class="history-button" 
-          on:click={() => showChatHistory = !showChatHistory}
+          onclick={() => showChatHistory = !showChatHistory}
         >
           {showChatHistory ? '←' : '→'}
         </button>
         <button 
           class="new-chat-button" 
-          on:click={startNewChat}
+          onclick={startNewChat}
         >
           + New Chat
         </button>
@@ -990,10 +1187,10 @@
                 type="text"
                 placeholder="Search models..."
                 value={modelSelectorFocused ? searchTerm : selectedModelName}
-                on:input={(e) => searchTerm = e.currentTarget.value}
+                oninput={(e) => searchTerm = e.currentTarget.value}
                 bind:this={searchInput}
-                on:focus={handleSearchFocus}
-                on:blur={handleSearchBlur}
+                onfocus={handleSearchFocus}
+                onblur={handleSearchBlur}
                 class="search-input"
                 class:focused={modelSelectorFocused}
               />
@@ -1003,7 +1200,7 @@
                     <div
                       class="dropdown-item"
                       class:selected={id === selectedModel}
-                      on:mousedown={() => handleModelSelect(id)}
+                      onmousedown={() => handleModelSelect(id)}
                       role="button"
                       tabindex="0"
                     >
@@ -1036,7 +1233,7 @@
             <button 
               class="web-search-toggle"
               class:enabled={webSearchEnabled}
-              on:click={() => webSearchEnabled = !webSearchEnabled}
+              onclick={() => webSearchEnabled = !webSearchEnabled}
               aria-label={webSearchEnabled ? "Disable web search" : "Enable web search"}
               title={webSearchEnabled ? "Disable web search" : "Enable web search"}
             >
@@ -1096,11 +1293,28 @@
     {#if parentChat}
       <div class="parent-chat-nav">
         <div class="parent-header">
-          <span class="parent-label">Forked from chat #{parentChat.id}</span>
+          <span class="parent-label">Forked from chat #{parentChat?.id}</span>
         </div>
         <div 
           class="parent-content"
-          on:click={() => loadChatById(parentChat.id.toString())}
+          onclick={async () => {
+            if (parentChat) {
+              const currentForkMessageId = messages.find(m => m.content === parentChat?.messageContent)?.id;
+              updateUrl(parentChat.id.toString());
+              await loadChatById(parentChat.id.toString());
+              if (currentForkMessageId) {
+                scrollToMessage(currentForkMessageId);
+              }
+            }
+          }}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.currentTarget.click();
+            }
+          }}
+          role="button"
+          tabindex="0"
         >
           <div class="parent-message">
             <div class="parent-info">
@@ -1118,7 +1332,7 @@
       </div>
     {/if}
 
-    <div class="messages" bind:this={messagesContainer} on:scroll={handleScroll}>
+    <div class="messages" bind:this={messagesContainer} onscroll={handleScroll}>
       {#if messages.length === 0}
         <div class="empty-state">
           <div class="empty-state-content">
@@ -1138,7 +1352,7 @@
       {/if}
       {#each messages as message}
         <div class="message-section">
-          <div class="message-container">
+          <div class="message-container" data-message-id={message.id || ''}>
             {#if message.id === editingMessageId}
               <div class="edit-container">
                 <textarea
@@ -1147,15 +1361,11 @@
                   class="edit-textarea"
                 ></textarea>
                 <div class="edit-actions">
-                  <button on:click={handleSaveEdit}>Save & Fork</button>
-                  <button on:click={cancelEdit} class="cancel-button">Cancel</button>
+                  <button onclick={handleSaveEdit}>Save & Fork</button>
+                  <button onclick={cancelEdit} class="cancel-button">Cancel</button>
                 </div>
               </div>
             {:else}
-              {#if message.id}
-                {@const messageForks = messageForksMap.get(message.id) || []}
-                {@const debug = console.log('Message forks for', message.id, ':', messageForks)}
-              {/if}
               <ChatMessage 
                 {message} 
                 {availableModels}
@@ -1164,7 +1374,6 @@
                 forks={messageForksMap.get(message.id ?? -1) || []}
                 showForks={true}
                 onShowForks={() => {
-                  console.log('Show forks clicked for message:', message.id);
                   if (message.id) {
                     loadForksForChat(currentChatId ?? 0);
                   }
@@ -1179,25 +1388,30 @@
     {#if !autoScroll && messages.length > 0}
       <button
         class="scroll-to-bottom-button"
-        on:click={scrollToBottom}
+        onclick={scrollToBottom}
       >
         Scroll to bottom
       </button>
     {/if}
 
-    <form on:submit|preventDefault={handleSubmit}>
+    <form 
+      onsubmit={(e) => { 
+        e.preventDefault(); 
+        handleSubmit(); 
+      }}
+    >
       <div class="input-container">
         <textarea
           bind:value={userInput}
           placeholder="Type your message... (Shift+Enter for new line)"
           disabled={isLoading}
-          on:keydown={(e) => {
+          onkeydown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               if (userInput.trim()) handleSubmit();
             }
           }}
-          on:input={autoResize}
+          oninput={autoResize}
           rows="1"
         ></textarea>
         <button type="submit" disabled={isLoading || !userInput.trim()}>

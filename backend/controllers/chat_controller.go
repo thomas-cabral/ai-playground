@@ -3,6 +3,7 @@ package controllers
 import (
 	"fmt"
 	"strconv"
+
 	"web/ai-playground/models"
 	"web/ai-playground/services"
 
@@ -12,6 +13,13 @@ import (
 
 type ChatController struct {
 	openRouterService *services.OpenRouterService
+}
+
+type ForkResponse struct {
+	MessageID      uint   `json:"messageId"`
+	ForkID         uint   `json:"forkId"`
+	MessageContent string `json:"messageContent"`
+	CreatedAt      string `json:"createdAt"`
 }
 
 func NewChatController(openRouterService *services.OpenRouterService) *ChatController {
@@ -249,11 +257,14 @@ func (cc *ChatController) HandleForkChat(c *gin.Context) {
 		return
 	}
 
+	fmt.Printf("Creating fork of chat %d at message %d\n", req.ChatID, req.MessageID)
+
 	// Get the original chat
 	var originalChat models.Chat
 	if err := cc.openRouterService.DB.Preload("Messages", func(db *gorm.DB) *gorm.DB {
 		return db.Order("created_at ASC")
 	}).First(&originalChat, req.ChatID).Error; err != nil {
+		fmt.Printf("Error finding original chat: %v\n", err)
 		c.JSON(404, gin.H{"error": "Original chat not found"})
 		return
 	}
@@ -266,9 +277,12 @@ func (cc *ChatController) HandleForkChat(c *gin.Context) {
 	}
 
 	if err := cc.openRouterService.DB.Create(&newChat).Error; err != nil {
+		fmt.Printf("Error creating fork: %v\n", err)
 		c.JSON(500, gin.H{"error": "Failed to create forked chat"})
 		return
 	}
+
+	fmt.Printf("Created new fork chat with ID %d\n", newChat.ID)
 
 	// Copy messages up to the fork point (but don't add the edited message)
 	for _, msg := range originalChat.Messages {
@@ -298,18 +312,55 @@ func (cc *ChatController) HandleForkChat(c *gin.Context) {
 
 func (cc *ChatController) HandleGetChatForks(c *gin.Context) {
 	chatID := c.Param("id")
-	var forks []struct {
-		MessageID uint `json:"messageId"`
-		ForkID    uint `json:"forkId"`
+	fmt.Printf("Looking for forks of chat: %s\n", chatID)
+
+	// Get all forks for this chat
+	var chats []models.Chat
+	err := cc.openRouterService.DB.
+		Where("parent_id = ? AND deleted_at IS NULL", chatID).
+		Order("created_at DESC").
+		Find(&chats).Error
+
+	if err != nil {
+		fmt.Printf("Error fetching forks: %v\n", err)
+		c.JSON(200, []ForkResponse{})
+		return
 	}
 
-	if err := cc.openRouterService.DB.
-		Table("chats").
-		Select("fork_message_id as MessageID, id as ForkID").
-		Where("parent_id = ?", chatID).
-		Scan(&forks).Error; err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	// If no forks found, return empty array
+	if len(chats) == 0 {
+		fmt.Printf("No forks found for chat %s\n", chatID)
+		c.JSON(200, []ForkResponse{})
 		return
+	}
+
+	// Build response with message content
+	var forks []ForkResponse
+	for _, chat := range chats {
+		if chat.ForkMessageID == nil {
+			continue
+		}
+
+		var message models.Message
+		if err := cc.openRouterService.DB.
+			Where("id = ?", *chat.ForkMessageID).
+			First(&message).Error; err != nil {
+			fmt.Printf("Error fetching message %d: %v\n", *chat.ForkMessageID, err)
+			continue
+		}
+
+		forks = append(forks, ForkResponse{
+			MessageID:      *chat.ForkMessageID,
+			ForkID:         chat.ID,
+			MessageContent: message.Content,
+			CreatedAt:      chat.CreatedAt,
+		})
+	}
+
+	fmt.Printf("Found %d forks for chat %s\n", len(forks), chatID)
+	for i, fork := range forks {
+		fmt.Printf("Fork %d: MessageID=%d, ForkID=%d, Content=%s\n",
+			i, fork.MessageID, fork.ForkID, fork.MessageContent)
 	}
 
 	c.JSON(200, forks)
