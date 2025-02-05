@@ -22,6 +22,113 @@
 
   let autoScroll = true;
 
+  // Update pagination variables
+  let currentPage = 1;
+  let hasMore = true;
+  let isFetchingMore = false;
+  let isInitialLoad = true;
+
+  let editingMessageId: number | null = null;
+  let editedContent = '';
+
+  // Add these variables
+  let forkHistory: { id: number; parentId: number | null; messageContent: string }[] = [];
+  let currentForkId: number | null = null;
+
+  // Add this type definition at the top with other types
+  interface Fork {
+    messageId: number;
+    forkId: number;
+    messageContent: string;
+    createdAt: string;
+  }
+
+  // Update the messageForksMap type
+  let messageForksMap: Map<number, Fork[]> = new Map();
+
+  // Update the parent chat type
+  let parentChat: { 
+    id: number; 
+    messageContent: string; 
+    createdAt: string;
+  } | null = null;
+
+  // Single onMount function to handle all initialization
+  onMount(async () => {
+    const savedModel = localStorage.getItem('selectedModel');
+    const urlParams = new URLSearchParams(window.location.search);
+    const chatId = urlParams.get('chat');
+    
+    try {
+      // 1. First fetch models
+      const response = await fetch('https://openrouter.ai/api/v1/models');
+      
+      if (!response.ok) throw new Error('Failed to fetch models');
+      
+      const data = await response.json();
+      const openRouterModels: Record<string, OpenRouterModel> = {};
+      
+      data.data.forEach((model: OpenRouterModel) => {
+        openRouterModels[model.id] = {
+          id: model.id,
+          name: model.name,
+          description: model.description,
+          pricing: model.pricing,
+          architecture: model.architecture
+        };
+      });
+
+      availableModels = openRouterModels;
+
+      // Set default model
+      if (savedModel && availableModels[savedModel]) {
+        selectedModel = savedModel;
+      } else {
+        selectedModel = Object.keys(availableModels).find(id => 
+          id === 'anthropic/claude-3.5-haiku'
+        ) || Object.keys(availableModels)[0];
+      }
+
+      filteredModels = { ...availableModels };
+
+      // 2. Initial chat history fetch
+      await fetchChatHistory(1, false);
+
+      // 3. Set up intersection observer after initial fetch
+      const observer = new IntersectionObserver(
+        async (entries) => {
+          const trigger = entries[0];
+          if (trigger.isIntersecting && hasMore && !isFetchingMore) {
+            await fetchChatHistory(currentPage + 1, true);
+          }
+        },
+        {
+          root: null,
+          rootMargin: '100px',
+          threshold: 0.1,
+        }
+      );
+
+      if (loadMoreTrigger) {
+        observer.observe(loadMoreTrigger);
+      }
+
+      // 4. If there's a chat ID in the URL, load it
+      if (chatId) {
+        await loadChatById(chatId);
+      }
+
+      return () => {
+        if (loadMoreTrigger) {
+          observer.unobserve(loadMoreTrigger);
+        }
+      };
+
+    } catch (error) {
+      console.error('Error in initialization:', error);
+    }
+  });
+
   afterUpdate(() => {
     if (messagesContainer && autoScroll) {
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -50,12 +157,82 @@
     window.history.replaceState({}, '', url);
   }
 
+  // Update the loadForksForChat function to add logging
+  async function loadForksForChat(chatId: number) {
+    try {
+      console.log('Loading forks for chat:', chatId);
+      const response = await fetch(`http://localhost:8088/api/chat/${chatId}/forks`);
+      if (response.ok) {
+        const forks = await response.json();
+        console.log('Received forks:', forks);
+        messageForksMap.clear();
+        
+        // For each fork, get the message content only if we have a valid messageId
+        for (const fork of forks) {
+          console.log('Processing fork:', fork);
+          if (!fork.messageId) {
+            console.log('Skipping fork due to missing messageId:', fork);
+            continue;
+          }
+          
+          const existingForks = messageForksMap.get(fork.messageId) || [];
+          existingForks.push({
+            messageId: fork.messageId,
+            forkId: fork.forkId,
+            messageContent: fork.messageContent || '', 
+            createdAt: fork.createdAt || new Date().toISOString()
+          });
+          messageForksMap.set(fork.messageId, existingForks);
+        }
+        
+        console.log('Updated messageForksMap:', messageForksMap);
+        // Force Svelte to update by creating a new Map
+        messageForksMap = new Map(messageForksMap);
+      }
+    } catch (error) {
+      console.error('Error loading forks:', error);
+      messageForksMap = new Map();
+    }
+  }
+
+  // Update loadChatById to load forks
   async function loadChatById(chatId: string) {
     try {
       const response = await fetch(`http://localhost:8088/api/chat/${chatId}`);
       if (response.ok) {
         const chat = await response.json();
-        loadChat(chat);
+        currentChatId = chat.id;
+        messages = chat.messages.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+          id: msg.id,
+          modelName: msg.modelName || chat.modelName,
+          starred: msg.starred,
+          tokenUsage: msg.tokenUsage,
+        }));
+        
+        // Load parent info if this is a fork
+        if (chat.parentId && chat.forkMessageId) {
+          const parentResponse = await fetch(`http://localhost:8088/api/chat/${chat.parentId}/fork-message/${chat.forkMessageId}`);
+          if (parentResponse.ok) {
+            const parentData = await parentResponse.json();
+            parentChat = {
+              id: parentData.chatId,
+              messageContent: parentData.messageContent,
+              createdAt: parentData.createdAt
+            };
+          }
+        } else {
+          parentChat = null;
+        }
+
+        if (chat.modelName && availableModels[chat.modelName]) {
+          selectedModel = chat.modelName;
+          localStorage.setItem('selectedModel', chat.modelName);
+        }
+
+        // Load forks for the current chat
+        await loadForksForChat(chat.id);
       } else {
         console.error('Chat not found');
         updateUrl(null);
@@ -65,89 +242,6 @@
       updateUrl(null);
     }
   }
-
-  onMount(async () => {
-    const savedModel = localStorage.getItem('selectedModel');
-    const urlParams = new URLSearchParams(window.location.search);
-    const chatId = urlParams.get('chat');
-    
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/models');
-      
-      if (!response.ok) throw new Error('Failed to fetch models');
-      
-      const data = await response.json();
-      const openRouterModels: Record<string, OpenRouterModel> = {};
-      
-      data.data.forEach((model: OpenRouterModel) => {
-        openRouterModels[model.id] = {
-          id: model.id,
-          name: model.name,
-          description: model.description,
-          pricing: model.pricing,
-          architecture: model.architecture
-        };
-      });
-
-      availableModels = openRouterModels;
-
-      // Set default model to Claude 3 Haiku if available, otherwise use first available model
-      if (savedModel && availableModels[savedModel]) {
-        selectedModel = savedModel;
-      } else {
-        selectedModel = Object.keys(availableModels).find(id => 
-          id === 'anthropic/claude-3.5-haiku'
-        ) || Object.keys(availableModels)[0];
-      }
-
-      // Initialize filtered models
-      filteredModels = { ...availableModels };
-
-      // Fetch chat history
-      try {
-        const response = await fetch('http://localhost:8088/api/history');
-        if (response.ok) {
-          const data = await response.json();
-          previousChats = Object.values(data).map((chat: any) => ({
-            id: chat.id,
-            messages: chat.messages.map((msg: any) => ({
-              id: msg.id,
-              chatId: msg.chatId,
-              role: msg.role,
-              content: msg.content,
-              createdAt: msg.createdAt,
-              updatedAt: msg.updatedAt,
-              deletedAt: msg.deletedAt,
-              modelName: msg.modelName,
-              starred: msg.starred,
-              tokenUsage: ('promptTokens' in msg && 'completionTokens' in msg && 'totalTokens' in msg)
-                ? {
-                    promptTokens: msg.promptTokens,
-                    completionTokens: msg.completionTokens,
-                    totalTokens: msg.totalTokens
-                  }
-                : undefined
-            })),
-            createdAt: chat.createdAt,
-            updatedAt: chat.updatedAt,
-            deletedAt: chat.deletedAt,
-            modelName: chat.modelName,
-            starred: chat.starred
-          }));
-
-          // Load chat from URL if present
-          if (chatId) {
-            await loadChatById(chatId);
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching chat history:', error);
-      }
-    } catch (error) {
-      console.error('Error fetching OpenRouter models:', error);
-      // Show error state or fallback
-    }
-  });
 
   async function* streamResponse(reader: ReadableStreamDefaultReader<Uint8Array>) {
     let lastChunk = '';
@@ -209,7 +303,7 @@
 
   async function updateChatHistory() {
     try {
-      const historyResponse = await fetch('http://localhost:8088/api/history');
+      const historyResponse = await fetch('http://localhost:8088/api/chat');
       if (historyResponse.ok) {
         const data = await historyResponse.json();
         previousChats = data.map((chat: any) => ({
@@ -353,7 +447,7 @@
 
             // After successful message submission, if this is a new chat
             if (currentChatId === null && messages.length === 2) { // First user+assistant message pair
-                const chatResponse = await fetch('http://localhost:8088/api/history');
+                const chatResponse = await fetch('http://localhost:8088/api/chat');
                 if (chatResponse.ok) {
                     const chats = await chatResponse.json();
                     const newChat = chats[chats.length - 1];
@@ -441,22 +535,28 @@
   // Show the selected model name in the input
   $: selectedModelName = availableModels[selectedModel]?.name || selectedModel;
 
+  // Update loadChat to be simpler and not trigger any message sends
   function loadChat(chat: Chat) {
     currentChatId = chat.id;
     updateUrl(chat.id.toString());
-    // Update selected model to match the chat's model
+    
     if (chat.modelName && availableModels[chat.modelName]) {
-        selectedModel = chat.modelName;
-        localStorage.setItem('selectedModel', chat.modelName);
+      selectedModel = chat.modelName;
+      localStorage.setItem('selectedModel', chat.modelName);
     }
+    
     messages = chat.messages.map(msg => ({
-        role: msg.role,
-        content: msg.content,
-        id: msg.id,
-        modelName: msg.modelName || chat.modelName, // Include ModelName from message or chat
-        starred: msg.starred,
-        tokenUsage: msg.tokenUsage
-    } as NewMessage));
+      role: msg.role,
+      content: msg.content,
+      id: msg.id,
+      modelName: msg.modelName || chat.modelName,
+      starred: msg.starred,
+      tokenUsage: msg.tokenUsage,
+    }));
+    
+    // Add this line to load forks when loading from history
+    loadForksForChat(chat.id);
+    
     showChatHistory = false;
   }
 
@@ -515,8 +615,16 @@
             const data = await response.json();
             // Update the chat's starred status in the previousChats array
             previousChats = previousChats.map(chat => 
-                chat.id === chatId ? { ...chat, Starred: data.starred } : chat
+                chat.id === chatId ? { ...chat, starred: data.starred } : chat
             );
+            
+            // Also update the current chat if it's the one being starred
+            if (currentChatId === chatId) {
+                messages = messages.map(msg => ({
+                    ...msg,
+                    starred: data.starred
+                }));
+            }
         }
     } catch (error) {
         console.error('Error toggling chat star:', error);
@@ -603,6 +711,165 @@
         console.error('Error deleting chat:', error);
     }
   }
+
+  // Update the chat history fetch function
+  async function fetchChatHistory(page: number = 1, append: boolean = false) {
+    try {
+      if (!append) {
+        isLoading = true;
+        previousChats = []; // Clear existing chats on initial load
+      } else {
+        if (isFetchingMore) return;
+        isFetchingMore = true;
+      }
+
+      const response = await fetch(`http://localhost:8088/api/chat?page=${page}`);
+      if (response.ok) {
+        const data = await response.json();
+        
+        const formattedChats = data.chats.map((chat: any) => ({
+          id: chat.id,
+          messages: chat.messages.map((msg: any) => ({
+            id: msg.id,
+            chatId: msg.chatId,
+            role: msg.role,
+            content: msg.content,
+            createdAt: msg.createdAt,
+            updatedAt: msg.updatedAt,
+            deletedAt: msg.deletedAt,
+            modelName: msg.modelName,
+            starred: msg.starred,
+            tokenUsage: ('promptTokens' in msg && 'completionTokens' in msg && 'totalTokens' in msg)
+              ? {
+                  promptTokens: msg.promptTokens,
+                  completionTokens: msg.completionTokens,
+                  totalTokens: msg.totalTokens
+                }
+              : undefined
+          })),
+          createdAt: chat.createdAt,
+          updatedAt: chat.updatedAt,
+          deletedAt: chat.deletedAt,
+          modelName: chat.modelName,
+          starred: chat.starred
+        }));
+
+        if (append) {
+          previousChats = [...previousChats, ...formattedChats];
+        } else {
+          previousChats = formattedChats;
+        }
+
+        hasMore = data.hasMore;
+        currentPage = page;
+      }
+    } catch (error) {
+      console.error('Error fetching chat history:', error);
+    } finally {
+      isLoading = false;
+      isFetchingMore = false;
+    }
+  }
+
+  // Update the intersection observer
+  let historyContainer: HTMLElement;
+  let loadMoreTrigger: HTMLElement;
+
+  async function handleEditMessage(message: Message) {
+    editingMessageId = message.id;
+    editedContent = message.content;
+  }
+
+  // Update loadForkHistory to handle fork chain correctly
+  async function loadForkHistory(chatId: number): Promise<Array<{
+    id: number;
+    parentId: number | null;
+    messageContent: string;
+  }>> {
+    try {
+      const response = await fetch(`http://localhost:8088/api/chat/${chatId}`);
+      if (response.ok) {
+        const chat: Chat = await response.json();
+        const history: Array<{
+          id: number;
+          parentId: number | null;
+          messageContent: string;
+        }> = [];
+        
+        if (chat.parentId) {
+          // Load parent history first
+          const parentHistory = await loadForkHistory(chat.parentId);
+          history.push(...parentHistory);
+        }
+        
+        // Add current chat to history
+        history.push({
+          id: chat.id,
+          parentId: chat.parentId || null,
+          messageContent: chat.forkMessageID ? 
+            chat.messages.find((m: Message) => m.id === chat.forkMessageID)?.content || '' : ''
+        });
+        
+        return history;
+      }
+      return [];
+    } catch (error) {
+      console.error('Error loading fork history:', error);
+      return [];
+    }
+  }
+
+  // Update handleSaveEdit to properly handle forking
+  async function handleSaveEdit() {
+    if (!editingMessageId || !editedContent.trim() || isLoading) return;
+
+    try {
+      isLoading = true;
+      
+      // Create the fork
+      const response = await fetch('http://localhost:8088/api/chat/fork', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chatId: currentChatId,
+          messageId: editingMessageId,
+          newContent: editedContent,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to create fork');
+
+      const data = await response.json();
+      const newChatId = data.id;
+
+      // Reset edit state
+      editingMessageId = null;
+      editedContent = '';
+
+      // Load forks for the current chat to update the UI
+      await loadForksForChat(currentChatId ?? 0);
+
+      // Navigate to the new forked chat
+      updateUrl(newChatId.toString());
+      await loadChatById(newChatId.toString());
+
+      // Send the edited message in the new chat
+      userInput = editedContent;
+      await handleSubmit();
+
+    } catch (error) {
+      console.error('Error creating fork:', error);
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  function cancelEdit() {
+    editingMessageId = null;
+    editedContent = '';
+  }
 </script>
 
 <svelte:window on:click={handleClickOutside}/>
@@ -612,8 +879,14 @@
     <div class="sidebar-header">
       <h3>Chat History</h3>
     </div>
-    <div class="chat-history">
-      {#each [...previousChats].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) as chat}
+    <div class="chat-history" bind:this={historyContainer}>
+      {#if isLoading && !isFetchingMore}
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+        </div>
+      {/if}
+      
+      {#each previousChats as chat}
         <div 
           class="chat-history-item" 
           class:starred={chat.starred}
@@ -652,11 +925,15 @@
               <span class="chat-model">{availableModels[chat.modelName]?.name || chat.modelName}</span>
             {/if}
             <span class="chat-snippet">
-              {chat.messages?.[0]?.content?.slice(0, 50) || 'Empty chat'}...
+              {#if chat.messages && chat.messages.length > 0}
+                {chat.messages[0].content?.slice(0, 50)}...
+              {:else}
+                Empty chat...
+              {/if}
             </span>
-            {#if chat.messages.length > 0}
+            {#if chat.messages && chat.messages.length > 0}
               <div class="chat-tokens">
-                {#if chat.messages.some(msg => msg.tokenUsage)}
+                {#if chat.messages[0].tokenUsage}
                   {@const tokens = calculateChatTokens(chat)}
                   <span title="Total tokens used in chat">
                     🔤 {tokens.totalTokens.toLocaleString()}
@@ -673,6 +950,17 @@
           </div>
         </div>
       {/each}
+      
+      {#if hasMore}
+        <div 
+          class="load-more-trigger" 
+          bind:this={loadMoreTrigger}
+        >
+          {#if isFetchingMore}
+            <div class="loading-spinner"></div>
+          {/if}
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -804,6 +1092,32 @@
       </div>
     </div>
 
+    <!-- Add parent chat navigation -->
+    {#if parentChat}
+      <div class="parent-chat-nav">
+        <div class="parent-header">
+          <span class="parent-label">Forked from chat #{parentChat.id}</span>
+        </div>
+        <div 
+          class="parent-content"
+          on:click={() => loadChatById(parentChat.id.toString())}
+        >
+          <div class="parent-message">
+            <div class="parent-info">
+              <div class="parent-meta">
+                <span class="parent-icon">↑</span>
+                <span class="parent-time">{formatDate(parentChat.createdAt)}</span>
+              </div>
+              <div class="parent-text">
+                <span class="parent-description">Original message:</span>
+                {parentChat.messageContent}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <div class="messages" bind:this={messagesContainer} on:scroll={handleScroll}>
       {#if messages.length === 0}
         <div class="empty-state">
@@ -825,11 +1139,38 @@
       {#each messages as message}
         <div class="message-section">
           <div class="message-container">
-            <ChatMessage 
+            {#if message.id === editingMessageId}
+              <div class="edit-container">
+                <textarea
+                  bind:value={editedContent}
+                  rows="4"
+                  class="edit-textarea"
+                ></textarea>
+                <div class="edit-actions">
+                  <button on:click={handleSaveEdit}>Save & Fork</button>
+                  <button on:click={cancelEdit} class="cancel-button">Cancel</button>
+                </div>
+              </div>
+            {:else}
+              {#if message.id}
+                {@const messageForks = messageForksMap.get(message.id) || []}
+                {@const debug = console.log('Message forks for', message.id, ':', messageForks)}
+              {/if}
+              <ChatMessage 
                 {message} 
-                {availableModels} 
-                onToggleStar={toggleMessageStar} 
-            />
+                {availableModels}
+                onToggleStar={toggleMessageStar}
+                onEdit={handleEditMessage}
+                forks={messageForksMap.get(message.id ?? -1) || []}
+                showForks={true}
+                onShowForks={() => {
+                  console.log('Show forks clicked for message:', message.id);
+                  if (message.id) {
+                    loadForksForChat(currentChatId ?? 0);
+                  }
+                }}
+              />
+            {/if}
           </div>
         </div>
       {/each}
@@ -1526,5 +1867,156 @@
 
   .empty-state-tips li:last-child {
     margin-bottom: 0;
+  }
+
+  .load-more-trigger {
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #646cff;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Add loading state styles */
+  .loading-state {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 2rem;
+  }
+
+  /* Add styles for message count */
+  .message-count {
+    font-size: 0.8rem;
+    color: #888;
+    background: rgba(100, 108, 255, 0.1);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .edit-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .edit-textarea {
+    width: 100%;
+    min-height: 100px;
+    padding: 0.75rem;
+    border: 1px solid #444;
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    color: #e1e1e1;
+    font-family: inherit;
+    resize: vertical;
+  }
+
+  .edit-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  }
+
+  .cancel-button {
+    background-color: #444;
+  }
+
+  .cancel-button:hover {
+    background-color: #555;
+  }
+
+  .parent-chat-nav {
+    padding: 0.75rem;
+    border-bottom: 1px solid #333;
+    background-color: #2a2a2a;
+  }
+
+  .parent-header {
+    margin-bottom: 0.5rem;
+  }
+
+  .parent-label {
+    font-size: 0.8rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .parent-content {
+    display: flex;
+    flex-direction: column;
+    padding: 0.75rem;
+    background: rgba(100, 108, 255, 0.1);
+    border-radius: 4px;
+    color: #e1e1e1;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+
+  .parent-content:hover {
+    background-color: rgba(100, 108, 255, 0.2);
+  }
+
+  .parent-message {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .parent-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .parent-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .parent-icon {
+    color: #646cff;
+    font-size: 1rem;
+  }
+
+  .parent-time {
+    color: #888;
+    font-size: 0.8rem;
+  }
+
+  .parent-description {
+    color: #888;
+    font-size: 0.8rem;
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .parent-text {
+    font-size: 0.9rem;
+    color: #e1e1e1;
+    line-height: 1.5;
   }
 </style> 

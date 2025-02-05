@@ -58,11 +58,14 @@ func setupRoutes(r *gin.Engine, cc *controllers.ChatController) {
 	api := r.Group("/api")
 	{
 		api.POST("/chat", cc.HandleChat)
+		api.GET("/chat", cc.HandleGetChats)
 		api.POST("/chat/new", cc.HandleNewChat)
-		api.GET("/history", cc.HandleGetChats)
 		api.GET("/chat/:id", cc.HandleGetChat)
 		api.POST("/chat/:id/star", cc.HandleToggleChatStar)
 		api.POST("/message/:id/star", cc.HandleToggleMessageStar)
 		api.DELETE("/chat/:id", cc.HandleDeleteChat)
+		api.POST("/chat/fork", cc.HandleForkChat)
+		api.GET("/chat/:id/forks", cc.HandleGetChatForks)
+		api.GET("/chat/:id/fork-message/:messageId", cc.HandleGetParentForkMessage)
 	}
 }
